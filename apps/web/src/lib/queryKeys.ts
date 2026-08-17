@@ -26,3 +26,7 @@ export const childrenKeyPrefix = (id: string): readonly ['children', string] => 
 
 /** Prefix covering every branch of every open move picker. */
 export const folderTreeKeyPrefix = (): readonly ['folderTree'] => ['folderTree'];
+
+/** Every rollup on screen. A completed upload changes the size of every folder above it, and the
+ *  client does not know which those are — the ancestors are the server's business. */
+export const statsKeyPrefix = (): readonly ['stats'] => ['stats'];

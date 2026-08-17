@@ -1,4 +1,4 @@
-import { useCallback, useState } from 'react';
+import { useCallback, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { ResourceName, type NodeListItem, type NodeSortField } from '@dataroom/contracts';
 import { StateBlock } from '@/components/ui/StateBlock';
@@ -16,6 +16,8 @@ import { filePath, folderPath, shareTokenOf, type BrowseContext } from './browse
 import { useChildren, useNodeDetail } from './useNodeQueries';
 import { useRenameNode } from './mutations';
 import type { NodeActions } from './NodeActionsMenu';
+import { DropZoneOverlay } from '@/features/uploads/DropZoneOverlay';
+import { useUploadStore } from '@/features/uploads/uploadStore';
 
 export interface FolderPageProps {
   nodeId: string;
@@ -39,6 +41,8 @@ export function FolderPage({ nodeId, context }: FolderPageProps): JSX.Element {
   const [moveTarget, setMoveTarget] = useState<NodeListItem | null>(null);
   const [renamingId, setRenamingId] = useState<string | null>(null);
   const [renameError, setRenameError] = useState<string | null>(null);
+  const fileInputRef = useRef<HTMLInputElement>(null);
+  const enqueue = useUploadStore((store) => store.enqueue);
 
   const detail = useNodeDetail(nodeId, shareToken);
   const children = useChildren(nodeId, { sort, dir }, shareToken);
@@ -147,7 +151,29 @@ export function FolderPage({ nodeId, context }: FolderPageProps): JSX.Element {
         fileCount={detail.data.node.subtreeFileCount}
         sizeBytes={detail.data.node.subtreeSizeBytes}
         onNewFolder={canManage ? openNewFolder : undefined}
+        onUpload={
+          canManage
+            ? () => {
+                fileInputRef.current?.click();
+              }
+            : undefined
+        }
       />
+
+      {canManage ? (
+        <input
+          ref={fileInputRef}
+          type="file"
+          multiple
+          aria-label="Choose files to upload"
+          className="sr-only"
+          onChange={(event) => {
+            const chosen = Array.from(event.target.files ?? []);
+            if (chosen.length > 0) enqueue(chosen, nodeId);
+            event.target.value = '';
+          }}
+        />
+      ) : null}
 
       <NodeTable
         items={items}
@@ -196,6 +222,7 @@ export function FolderPage({ nodeId, context }: FolderPageProps): JSX.Element {
 
       {canManage ? (
         <>
+          <DropZoneOverlay parentId={nodeId} folderName={detail.data.node.name} />
           <NewFolderDialog open={newFolderOpen} onOpenChange={setNewFolderOpen} parentId={nodeId} />
           <DeleteConfirmDialog
             open={deleteTarget !== null}

@@ -1,7 +1,11 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { Outlet, useMatch } from 'react-router-dom';
+import { useQueryClient } from '@tanstack/react-query';
 import { useAuth } from '@/features/auth/useAuth';
 import { useRooms } from '@/features/rooms/useRooms';
+import { UploadQueuePanel } from '@/features/uploads/UploadQueuePanel';
+import { useUploadStore } from '@/features/uploads/uploadStore';
+import { childrenKeyPrefix, qk, statsKeyPrefix } from '@/lib/queryKeys';
 import { TopBar } from './TopBar';
 import { Sidebar } from './Sidebar';
 
@@ -12,6 +16,21 @@ import { Sidebar } from './Sidebar';
 export function AppShell(): JSX.Element {
   const { user, signOut } = useAuth();
   const [sidebarOpen, setSidebarOpen] = useState(false);
+  const queryClient = useQueryClient();
+  const setInvalidator = useUploadStore((store) => store.setInvalidator);
+
+  useEffect(() => {
+    // A finished upload changes the folder it landed in and every rollup above it.
+    setInvalidator((parentId) => {
+      void queryClient.invalidateQueries({ queryKey: childrenKeyPrefix(parentId) });
+      void queryClient.invalidateQueries({ queryKey: qk.node(parentId) });
+      void queryClient.invalidateQueries({ queryKey: statsKeyPrefix() });
+      void queryClient.invalidateQueries({ queryKey: qk.rooms() });
+    });
+    return () => {
+      setInvalidator(null);
+    };
+  }, [queryClient, setInvalidator]);
   const match = useMatch('/rooms/:roomId/*');
   const exactMatch = useMatch('/rooms/:roomId');
   const roomId = match?.params.roomId ?? exactMatch?.params.roomId;
@@ -46,6 +65,7 @@ export function AppShell(): JSX.Element {
           <Outlet />
         </main>
       </div>
+      <UploadQueuePanel />
     </div>
   );
 }
