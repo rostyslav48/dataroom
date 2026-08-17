@@ -1,7 +1,9 @@
 import { describe, expect, it } from 'vitest';
 import { screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import { fixtures } from '@dataroom/contracts';
+import { http, HttpResponse } from 'msw';
+import { API_BASE, fixtures } from '@dataroom/contracts';
+import { server } from '@/mocks/server';
 import { useMockApi } from '@/test/msw';
 import { renderWithProviders } from '@/test/harness';
 import { childrenOf } from '@/mocks/db';
@@ -159,6 +161,39 @@ describe('inline rename', () => {
       expect(screen.queryByLabelText('Rename Legal')).not.toBeInTheDocument();
     });
     expect(screen.getByRole('button', { name: 'Legal' })).toBeInTheDocument();
+  });
+
+  it('shows the new name before the server answers, and rolls it back on failure', async () => {
+    let release: (() => void) | undefined;
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    server.use(
+      http.patch(`*${API_BASE}/nodes/:id`, async () => {
+        await gate;
+        return HttpResponse.json(
+          { code: 'INTERNAL', message: 'nope', requestId: 'req-1' },
+          { status: 500 },
+        );
+      }),
+    );
+
+    renderFolder();
+    await startRename('Legal');
+    const input = screen.getByLabelText('Rename Legal');
+    await userEvent.clear(input);
+    await userEvent.type(input, 'Instant{Enter}');
+
+    // Optimistic: the row shows the new name while the request is still in flight.
+    await waitFor(() => {
+      expect(screen.getByLabelText('Rename Instant')).toBeInTheDocument();
+    });
+
+    release?.();
+    expect(await screen.findByRole('alert')).toHaveTextContent('Something went wrong');
+    await waitFor(() => {
+      expect(screen.getByLabelText('Rename Legal')).toBeInTheDocument();
+    });
   });
 
   it('restores the original name on Escape', async () => {
