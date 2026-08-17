@@ -6,8 +6,11 @@ import { LoggerModule } from 'nestjs-pino';
 import { AuthModule } from './auth/auth.module';
 import { AppConfig } from './config/app.config';
 import { ConfigModule } from './config/config.module';
+import { DataRoomsModule } from './data-rooms/data-rooms.module';
 import { DatabaseModule } from './database/database.module';
 import { HealthController } from './health/health.controller';
+import { NodesModule } from './nodes/nodes.module';
+import { PermissionsModule } from './permissions/permissions.module';
 import { UsersModule } from './users/users.module';
 
 /** One minute, ten requests — the limit `/shared/:token` is served under (SPEC-05). */
@@ -49,6 +52,9 @@ export const SHARE_THROTTLER = 'share';
 
     UsersModule,
     AuthModule,
+    PermissionsModule,
+    DataRoomsModule,
+    NodesModule,
   ],
   controllers: [HealthController],
 })

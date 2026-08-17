@@ -18,6 +18,15 @@ export interface CursorPayload {
   /** Already lowercased — it is compared against `lower(name)` in SQL. */
   name: string;
   id: string;
+  /**
+   * The value of the *requested* sort key on the last row, when sorting by something other than
+   * name — a size or a timestamp, as a string. Without it, a page boundary in a size-sorted listing
+   * could not be expressed, and pagination would silently fall back to skipping rows.
+   *
+   * Adding this field is not a contract change: the cursor is documented as opaque and
+   * backend-internal, and clients pass it back unread.
+   */
+  sortValue?: string;
 }
 
 const WireCursor = z
@@ -25,11 +34,17 @@ const WireCursor = z
     t: NodeType,
     n: z.string(),
     i: Uuid,
+    v: z.string().optional(),
   })
   .strict();
 
 export function encodeCursor(payload: CursorPayload): string {
-  const wire = { t: payload.type, n: payload.name, i: payload.id };
+  const wire = {
+    t: payload.type,
+    n: payload.name,
+    i: payload.id,
+    ...(payload.sortValue === undefined ? {} : { v: payload.sortValue }),
+  };
   return Buffer.from(JSON.stringify(wire), 'utf8').toString('base64url');
 }
 
@@ -52,5 +67,10 @@ export function decodeCursor(raw: string): CursorPayload {
   const result = WireCursor.safeParse(parsed);
   if (!result.success) return invalid();
 
-  return { type: result.data.t, name: result.data.n, id: result.data.i };
+  return {
+    type: result.data.t,
+    name: result.data.n,
+    id: result.data.i,
+    ...(result.data.v === undefined ? {} : { sortValue: result.data.v }),
+  };
 }
