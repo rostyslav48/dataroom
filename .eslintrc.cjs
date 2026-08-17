@@ -57,5 +57,11 @@ module.exports = {
       ],
       rules: { 'no-restricted-syntax': 'off', 'no-console': 'off' },
     },
+    {
+      // Playwright's fixture signature is `async ({}, use) => …` — the empty pattern is required
+      // by the API, not an oversight.
+      files: ['e2e/**'],
+      rules: { 'no-empty-pattern': 'off' },
+    },
   ],
 };
