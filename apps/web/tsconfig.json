@@ -12,6 +12,9 @@
     "isolatedModules": true,
     "useDefineForClassFields": true,
     "types": ["vite/client", "vitest/globals", "@testing-library/jest-dom"],
+    // Declared here rather than inherited: `paths` resolve against the config that declares
+    // `baseUrl`, so without this the `@/*` alias would point at the repo root, not at apps/web/src.
+    "baseUrl": ".",
     "paths": {
       "@dataroom/contracts": ["../../packages/contracts/src/index.ts"],
       "@/*": ["./src/*"]
