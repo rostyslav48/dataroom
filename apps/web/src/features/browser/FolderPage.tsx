@@ -18,6 +18,7 @@ import { useRenameNode } from './mutations';
 import type { NodeActions } from './NodeActionsMenu';
 import { DropZoneOverlay } from '@/features/uploads/DropZoneOverlay';
 import { useUploadStore } from '@/features/uploads/uploadStore';
+import { downloadNode } from '@/features/viewer/download';
 
 export interface FolderPageProps {
   nodeId: string;
@@ -41,6 +42,7 @@ export function FolderPage({ nodeId, context }: FolderPageProps): JSX.Element {
   const [moveTarget, setMoveTarget] = useState<NodeListItem | null>(null);
   const [renamingId, setRenamingId] = useState<string | null>(null);
   const [renameError, setRenameError] = useState<string | null>(null);
+  const [actionError, setActionError] = useState<string | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const enqueue = useUploadStore((store) => store.enqueue);
 
@@ -131,6 +133,12 @@ export function FolderPage({ nodeId, context }: FolderPageProps): JSX.Element {
         onMove: (node) => {
           setMoveTarget(node);
         },
+        onDownload: (node) => {
+          setActionError(null);
+          void downloadNode(node.id, node.name, shareToken).catch((error: unknown) => {
+            setActionError(presentError(error).title);
+          });
+        },
         onDelete: (node) => {
           setDeleteTarget(node);
         },
@@ -174,6 +182,12 @@ export function FolderPage({ nodeId, context }: FolderPageProps): JSX.Element {
           }}
         />
       ) : null}
+
+      {actionError === null ? null : (
+        <p role="alert" className="mb-3 rounded-md bg-danger-subtle px-3 py-2 text-sm text-danger">
+          {actionError}
+        </p>
+      )}
 
       <NodeTable
         items={items}

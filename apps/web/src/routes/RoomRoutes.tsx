@@ -6,6 +6,7 @@ import { getDataRoom } from '@/lib/apiEndpoints';
 import { presentError } from '@/lib/errorMap';
 import { qk } from '@/lib/queryKeys';
 import { FolderPage } from '@/features/browser/FolderPage';
+import { FileViewerPage } from '@/features/viewer/FileViewerPage';
 import { folderPath } from '@/features/browser/browseContext';
 import { NotFoundPage } from './NotFoundPage';
 
@@ -59,4 +60,10 @@ export function RoomFolderRoute(): JSX.Element {
   const { roomId, nodeId } = useParams();
   if (roomId === undefined || nodeId === undefined) return <NotFoundPage />;
   return <FolderPage nodeId={nodeId} context={{ kind: 'room', roomId }} />;
+}
+
+export function RoomFileRoute(): JSX.Element {
+  const { roomId, nodeId } = useParams();
+  if (roomId === undefined || nodeId === undefined) return <NotFoundPage />;
+  return <FileViewerPage nodeId={nodeId} context={{ kind: 'room', roomId }} />;
 }

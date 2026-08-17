@@ -3,7 +3,7 @@ import { LoginPage } from '@/features/auth/LoginPage';
 import { RequireAuth } from '@/features/auth/RequireAuth';
 import { AppShell } from '@/components/layout/AppShell';
 import { RoomsPage } from '@/features/rooms/RoomsPage';
-import { RoomFolderRoute, RoomRootRoute } from './RoomRoutes';
+import { RoomFileRoute, RoomFolderRoute, RoomRootRoute } from './RoomRoutes';
 import { NotFoundPage } from './NotFoundPage';
 
 /**
@@ -22,6 +22,7 @@ export const routes: RouteObject[] = [
           { path: '/rooms', element: <RoomsPage /> },
           { path: '/rooms/:roomId', element: <RoomRootRoute /> },
           { path: '/rooms/:roomId/f/:nodeId', element: <RoomFolderRoute /> },
+          { path: '/rooms/:roomId/file/:nodeId', element: <RoomFileRoute /> },
         ],
       },
     ],
