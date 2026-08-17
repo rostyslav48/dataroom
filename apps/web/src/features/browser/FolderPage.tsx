@@ -19,6 +19,7 @@ import type { NodeActions } from './NodeActionsMenu';
 import { DropZoneOverlay } from '@/features/uploads/DropZoneOverlay';
 import { useUploadStore } from '@/features/uploads/uploadStore';
 import { downloadNode } from '@/features/viewer/download';
+import { ShareDialog } from '@/features/shares/ShareDialog';
 
 export interface FolderPageProps {
   nodeId: string;
@@ -40,6 +41,7 @@ export function FolderPage({ nodeId, context }: FolderPageProps): JSX.Element {
   const [newFolderOpen, setNewFolderOpen] = useState(false);
   const [deleteTarget, setDeleteTarget] = useState<NodeListItem | null>(null);
   const [moveTarget, setMoveTarget] = useState<NodeListItem | null>(null);
+  const [shareTarget, setShareTarget] = useState<NodeListItem | null>(null);
   const [renamingId, setRenamingId] = useState<string | null>(null);
   const [renameError, setRenameError] = useState<string | null>(null);
   const [actionError, setActionError] = useState<string | null>(null);
@@ -133,6 +135,9 @@ export function FolderPage({ nodeId, context }: FolderPageProps): JSX.Element {
         onMove: (node) => {
           setMoveTarget(node);
         },
+        onShare: (node) => {
+          setShareTarget(node);
+        },
         onDownload: (node) => {
           setActionError(null);
           void downloadNode(node.id, node.name, shareToken).catch((error: unknown) => {
@@ -159,6 +164,13 @@ export function FolderPage({ nodeId, context }: FolderPageProps): JSX.Element {
         fileCount={detail.data.node.subtreeFileCount}
         sizeBytes={detail.data.node.subtreeSizeBytes}
         onNewFolder={canManage ? openNewFolder : undefined}
+        onShare={
+          canManage
+            ? () => {
+                setShareTarget(detail.data.node);
+              }
+            : undefined
+        }
         onUpload={
           canManage
             ? () => {
@@ -245,6 +257,13 @@ export function FolderPage({ nodeId, context }: FolderPageProps): JSX.Element {
             }}
             node={deleteTarget}
             parentId={nodeId}
+          />
+          <ShareDialog
+            open={shareTarget !== null}
+            onOpenChange={(next) => {
+              if (!next) setShareTarget(null);
+            }}
+            node={shareTarget}
           />
           <MoveDialog
             open={moveTarget !== null}
