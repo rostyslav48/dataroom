@@ -1,6 +1,7 @@
 import { QueryClientProvider, type QueryClient } from '@tanstack/react-query';
 import { BrowserRouter } from 'react-router-dom';
 import { AppRoutes } from '@/routes/routes';
+import { AuthProvider } from '@/features/auth/AuthProvider';
 import { createQueryClient } from '@/lib/queryClient';
 
 const defaultClient = createQueryClient();
@@ -14,7 +15,9 @@ export function App({ queryClient = defaultClient }: AppProps): JSX.Element {
   return (
     <QueryClientProvider client={queryClient}>
       <BrowserRouter>
-        <AppRoutes />
+        <AuthProvider>
+          <AppRoutes />
+        </AuthProvider>
       </BrowserRouter>
     </QueryClientProvider>
   );

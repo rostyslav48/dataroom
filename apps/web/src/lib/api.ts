@@ -162,6 +162,29 @@ export function resetApiClientState(): void {
 
 // ── request ──────────────────────────────────────────────────────────────────────────────────
 
+let signalForwardingSupported: boolean | null = null;
+
+/**
+ * Whether this runtime's `fetch` accepts the `AbortSignal` implementation the caller handed us.
+ *
+ * A browser always does. jsdom, however, installs its own `AbortSignal` while `fetch` comes from
+ * Node, and Node's brand check rejects the foreign object — every request would fail with a
+ * `TypeError` that has nothing to do with the code under test. Detected once at runtime rather
+ * than branched on an environment flag, so production keeps real cancellation and nothing here
+ * depends on how the test runner is configured.
+ */
+function canForwardSignal(signal: AbortSignal): boolean {
+  if (signalForwardingSupported === null) {
+    try {
+      void new Request('http://localhost/abort-signal-probe', { signal });
+      signalForwardingSupported = true;
+    } catch {
+      signalForwardingSupported = false;
+    }
+  }
+  return signalForwardingSupported;
+}
+
 function toApiClientError(status: number, payload: unknown): ApiClientError {
   const parsed = ApiError.safeParse(payload);
   if (parsed.success) {
@@ -204,7 +227,7 @@ export async function apiRequest<TResponse>(config: RequestConfig<TResponse>): P
         credentials: 'include',
         headers,
         ...(body === undefined ? {} : { body: JSON.stringify(body) }),
-        ...(signal === undefined ? {} : { signal }),
+        ...(signal === undefined || !canForwardSignal(signal) ? {} : { signal }),
       });
     } catch (cause) {
       if (cause instanceof DOMException && cause.name === 'AbortError') throw cause;

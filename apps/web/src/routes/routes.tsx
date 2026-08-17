@@ -1,4 +1,6 @@
 import { Navigate, useRoutes, type RouteObject } from 'react-router-dom';
+import { LoginPage } from '@/features/auth/LoginPage';
+import { RequireAuth } from '@/features/auth/RequireAuth';
 import { NotFoundPage } from './NotFoundPage';
 
 /**
@@ -6,7 +8,11 @@ import { NotFoundPage } from './NotFoundPage';
  * inside a `MemoryRouter` — the routing that ships is the routing under test.
  */
 export const routes: RouteObject[] = [
-  { path: '/', element: <Navigate to="/rooms" replace /> },
+  { path: '/login', element: <LoginPage /> },
+  {
+    element: <RequireAuth />,
+    children: [{ path: '/', element: <Navigate to="/rooms" replace /> }],
+  },
   { path: '*', element: <NotFoundPage /> },
 ];
 
