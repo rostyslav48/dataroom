@@ -3,6 +3,9 @@
   "compilerOptions": {
     "module": "ESNext",
     "moduleResolution": "bundler",
+    // `page.evaluate` bodies are compiled here but run in the browser, so this project needs the
+    // DOM lib even though nothing in it executes in Node.
+    "lib": ["ES2022", "DOM"],
     "noEmit": true,
     "declaration": false,
     "types": ["node"]
