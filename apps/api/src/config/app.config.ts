@@ -23,6 +23,12 @@ export class AppConfig {
     return this.env.PORT;
   }
 
+  /** Silent under test: assertions are on responses, and a wall of expected 4xx logs hides them. */
+  get logLevel(): 'silent' | 'debug' | 'info' {
+    if (this.env.NODE_ENV === 'test') return 'silent';
+    return this.env.NODE_ENV === 'production' ? 'info' : 'debug';
+  }
+
   get webOrigin(): string {
     return this.env.WEB_ORIGIN;
   }

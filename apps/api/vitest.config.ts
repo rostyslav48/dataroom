@@ -29,6 +29,8 @@ export default defineConfig({
     globals: true,
     environment: 'node',
     include: ['test/**/*.test.ts', 'src/**/*.test.ts'],
+    globalSetup: ['./test/global-setup.ts'],
+    setupFiles: ['./test/support/env.ts'],
     // Integration tests start their own Postgres container; running suites in parallel would
     // start one per file and exhaust the daemon on a laptop.
     fileParallelism: false,

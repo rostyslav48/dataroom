@@ -1,7 +1,8 @@
-import { join, resolve } from 'node:path';
+import { resolve } from 'node:path';
 import 'reflect-metadata';
 import { DataSource, type DataSourceOptions } from 'typeorm';
 import { ALL_ENTITIES } from './entities';
+import { MIGRATIONS } from './migrations';
 
 /**
  * The DataSource the TypeORM CLI uses for `migration:run` / `migration:revert`.
@@ -27,7 +28,7 @@ export const dataSourceOptions: DataSourceOptions = {
   type: 'postgres',
   url: databaseUrl,
   entities: ALL_ENTITIES,
-  migrations: [join(__dirname, 'migrations', '*.{ts,js}')],
+  migrations: MIGRATIONS,
   // Entities are a typed view over the migrations, never the source of truth.
   synchronize: false,
   logging: ['error', 'warn'],

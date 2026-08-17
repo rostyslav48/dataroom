@@ -1,8 +1,8 @@
-import { join } from 'node:path';
 import { Module } from '@nestjs/common';
 import { TypeOrmModule } from '@nestjs/typeorm';
 import { AppConfig } from '../config/app.config';
 import { ALL_ENTITIES } from './entities';
+import { MIGRATIONS } from './migrations';
 
 @Module({
   imports: [
@@ -12,7 +12,7 @@ import { ALL_ENTITIES } from './entities';
         type: 'postgres' as const,
         url: config.databaseUrl,
         entities: ALL_ENTITIES,
-        migrations: [join(__dirname, 'migrations', '*.{ts,js}')],
+        migrations: MIGRATIONS,
         // Never true, including locally: a schema that drifts from its migrations is a schema
         // nobody can deploy.
         synchronize: false,
