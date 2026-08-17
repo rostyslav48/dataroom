@@ -12,6 +12,10 @@ export const qk = {
    *  re-render of the same one, so it must reset pagination. */
   children: (id: string, p: object) => ['children', id, p] as const,
   stats: (id: string) => ['stats', id] as const,
+  /** The move picker's lazily expanded branches. Deliberately outside the `children` namespace:
+   *  it holds a single page, not an infinite one, and optimistic patches over `children` would
+   *  otherwise try to rewrite a shape that has no pages. */
+  folderTree: (id: string) => ['folderTree', id] as const,
   deletePreview: (id: string) => ['deletePreview', id] as const,
   shares: (nodeId: string) => ['shares', nodeId] as const,
   sharedLink: (token: string) => ['sharedLink', token] as const,
@@ -19,3 +23,6 @@ export const qk = {
 
 /** Prefix used to invalidate every page of every sort order for one folder. */
 export const childrenKeyPrefix = (id: string): readonly ['children', string] => ['children', id];
+
+/** Prefix covering every branch of every open move picker. */
+export const folderTreeKeyPrefix = (): readonly ['folderTree'] => ['folderTree'];

@@ -8,6 +8,7 @@ import { Breadcrumbs } from './Breadcrumbs';
 import { FolderToolbar } from './FolderToolbar';
 import { LoadMoreSentinel } from './LoadMoreSentinel';
 import { DeleteConfirmDialog } from './DeleteConfirmDialog';
+import { MoveDialog } from './MoveDialog';
 import { NewFolderDialog } from './NewFolderDialog';
 import { NodeTable } from './NodeTable';
 import { SkeletonRows } from './states';
@@ -35,6 +36,7 @@ export function FolderPage({ nodeId, context }: FolderPageProps): JSX.Element {
   const [dir, setDir] = useState<'asc' | 'desc'>('asc');
   const [newFolderOpen, setNewFolderOpen] = useState(false);
   const [deleteTarget, setDeleteTarget] = useState<NodeListItem | null>(null);
+  const [moveTarget, setMoveTarget] = useState<NodeListItem | null>(null);
   const [renamingId, setRenamingId] = useState<string | null>(null);
   const [renameError, setRenameError] = useState<string | null>(null);
 
@@ -122,6 +124,9 @@ export function FolderPage({ nodeId, context }: FolderPageProps): JSX.Element {
           setRenamingId(node.id);
           setRenameError(null);
         },
+        onMove: (node) => {
+          setMoveTarget(node);
+        },
         onDelete: (node) => {
           setDeleteTarget(node);
         },
@@ -199,6 +204,17 @@ export function FolderPage({ nodeId, context }: FolderPageProps): JSX.Element {
             }}
             node={deleteTarget}
             parentId={nodeId}
+          />
+          <MoveDialog
+            open={moveTarget !== null}
+            onOpenChange={(next) => {
+              if (!next) setMoveTarget(null);
+            }}
+            node={moveTarget}
+            parentId={nodeId}
+            rootId={detail.data.shareRootId}
+            rootName={detail.data.breadcrumbs[0]?.name ?? detail.data.dataRoomName}
+            shareToken={shareToken}
           />
         </>
       ) : null}

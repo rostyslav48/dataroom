@@ -7,7 +7,7 @@ import {
 } from '@tanstack/react-query';
 import type { ListChildrenResponse, NodeDto, NodeListItem } from '@dataroom/contracts';
 import { createFolder, deleteNode, moveNode, renameNode } from '@/lib/apiEndpoints';
-import { childrenKeyPrefix, qk } from '@/lib/queryKeys';
+import { childrenKeyPrefix, folderTreeKeyPrefix, qk } from '@/lib/queryKeys';
 
 /**
  * Mutations over the folder tree, with optimistic cache updates and rollback.
@@ -54,6 +54,7 @@ function invalidateFolder(queryClient: QueryClient, parentId: string, nodeId?: s
   void queryClient.invalidateQueries({ queryKey: qk.node(parentId) });
   void queryClient.invalidateQueries({ queryKey: qk.stats(parentId) });
   void queryClient.invalidateQueries({ queryKey: qk.rooms() });
+  void queryClient.invalidateQueries({ queryKey: folderTreeKeyPrefix() });
   if (nodeId !== undefined) {
     void queryClient.invalidateQueries({ queryKey: qk.node(nodeId) });
   }
