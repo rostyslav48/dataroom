@@ -1,6 +1,8 @@
 import { Navigate, useRoutes, type RouteObject } from 'react-router-dom';
 import { LoginPage } from '@/features/auth/LoginPage';
 import { RequireAuth } from '@/features/auth/RequireAuth';
+import { AppShell } from '@/components/layout/AppShell';
+import { RoomsPage } from '@/features/rooms/RoomsPage';
 import { NotFoundPage } from './NotFoundPage';
 
 /**
@@ -11,7 +13,13 @@ export const routes: RouteObject[] = [
   { path: '/login', element: <LoginPage /> },
   {
     element: <RequireAuth />,
-    children: [{ path: '/', element: <Navigate to="/rooms" replace /> }],
+    children: [
+      { path: '/', element: <Navigate to="/rooms" replace /> },
+      {
+        element: <AppShell />,
+        children: [{ path: '/rooms', element: <RoomsPage /> }],
+      },
+    ],
   },
   { path: '*', element: <NotFoundPage /> },
 ];
