@@ -1,0 +1,22 @@
+node_modules/
+dist/
+build/
+coverage/
+.turbo/
+
+# env — never committed, see .env.example
+.env
+.env.*
+!.env.example
+
+# build/test artifacts
+*.tsbuildinfo
+playwright-report/
+test-results/
+blob-report/
+.vite/
+
+# editors / OS
+.DS_Store
+.idea/
+.vscode/

@@ -1,0 +1,23 @@
+# Local Postgres only. Object storage is Supabase (hosted); there is no local storage emulator,
+# because the signed-URL behaviour we depend on is exactly what an emulator would not reproduce.
+services:
+  postgres:
+    image: postgres:15-alpine
+    container_name: dataroom-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: dataroom
+      POSTGRES_PASSWORD: dataroom
+      POSTGRES_DB: dataroom
+    ports:
+      - '5432:5432'
+    volumes:
+      - dataroom-pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -U dataroom -d dataroom']
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+volumes:
+  dataroom-pgdata:

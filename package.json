@@ -1,0 +1,30 @@
+{
+  "name": "dataroom",
+  "version": "0.1.0",
+  "private": true,
+  "packageManager": "pnpm@9.15.9",
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "dev:api": "pnpm --filter @dataroom/api start:dev",
+    "dev:web": "pnpm --filter @dataroom/web dev",
+    "typecheck": "pnpm -r exec tsc --noEmit",
+    "lint": "pnpm -r lint",
+    "test": "pnpm -r --filter=!@dataroom/e2e test",
+    "test:e2e": "pnpm --filter @dataroom/e2e test",
+    "build": "pnpm -r build",
+    "db:up": "docker compose up -d postgres",
+    "db:migrate": "pnpm --filter @dataroom/api migration:run",
+    "db:seed": "pnpm --filter @dataroom/api seed",
+    "check:ownership": "node scripts/check-ownership.mjs"
+  },
+  "devDependencies": {
+    "@typescript-eslint/eslint-plugin": "^7.18.0",
+    "@typescript-eslint/parser": "^7.18.0",
+    "eslint": "^8.57.0",
+    "eslint-config-prettier": "^9.1.0",
+    "prettier": "^3.3.3",
+    "typescript": "^5.5.4"
+  }
+}

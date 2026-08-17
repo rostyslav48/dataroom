@@ -1,0 +1,14 @@
+{
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "rootDir": "src",
+    "outDir": "dist",
+    "declaration": false,
+    "types": ["node"],
+    // The build resolves `@dataroom/contracts` to the workspace package's built output rather than
+    // to its source, so `dist/` is self-contained and `node dist/main.js` needs no path mapping.
+    "paths": {}
+  },
+  "include": ["src"],
+  "exclude": ["src/**/*.test.ts", "test", "vitest.config.ts"]
+}

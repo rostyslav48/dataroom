@@ -1,0 +1,108 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+env:
+  NODE_VERSION: '22'
+
+jobs:
+  # Per-commit ownership enforcement. Runs first and cheapest: a track that wrote outside its
+  # paths is a structural violation, and there is no point spending CI minutes on the rest.
+  ownership:
+    name: ownership check
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+      - name: Check Track trailers and file globs
+        run: node scripts/check-ownership.mjs ${{ github.event.pull_request.base.sha }} ${{ github.event.pull_request.head.sha }}
+
+  quality:
+    name: lint · typecheck
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - name: No inline lint suppressions
+        run: |
+          if grep -rn --include='*.ts' --include='*.tsx' -e 'eslint-disable' -e '@ts-ignore' -e '@ts-nocheck' apps packages e2e; then
+            echo "::error::Lint/type suppressions are not allowed — fix the code or the rule."
+            exit 1
+          fi
+      - name: No TODO or stub markers
+        run: |
+          if grep -rn --include='*.ts' --include='*.tsx' -e 'TODO' -e 'FIXME' -e 'XXX:' apps packages e2e; then
+            echo "::error::TODO/FIXME markers are not allowed in code presented as finished."
+            exit 1
+          fi
+      - run: pnpm lint
+      - run: pnpm --filter @dataroom/contracts build
+      - run: pnpm typecheck
+
+  test-api:
+    name: api — unit · integration · contract
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm --filter @dataroom/contracts build
+      # Testcontainers starts its own Postgres; the runner's Docker daemon is all it needs.
+      - run: pnpm --filter @dataroom/api test:coverage
+
+  test-web:
+    name: web — component
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm --filter @dataroom/contracts build
+      - run: pnpm --filter @dataroom/web test:coverage
+
+  build:
+    name: build
+    runs-on: ubuntu-latest
+    needs: [quality]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm build
+      - name: Service-role key must not reach the browser bundle
+        run: |
+          if grep -rl "SUPABASE_SERVICE_ROLE_KEY\|service_role" apps/web/dist; then
+            echo "::error::A service-role reference reached the built web bundle."
+            exit 1
+          fi
+      - name: MSW must not be bundled into production
+        run: |
+          if grep -rl "msw/browser\|mockServiceWorker" apps/web/dist; then
+            echo "::error::MSW code reached the production bundle."
+            exit 1
+          fi

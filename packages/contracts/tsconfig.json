@@ -1,0 +1,12 @@
+{
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": {
+    // DOM because `UploadQueueItem` carries a browser `File`: the contract describes both sides of
+    // the boundary, and the upload queue's shape is part of the upload contract.
+    "lib": ["ES2022", "DOM"],
+    "rootDir": "src",
+    "outDir": "dist",
+    "types": []
+  },
+  "include": ["src"]
+}
