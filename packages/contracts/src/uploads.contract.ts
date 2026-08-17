@@ -44,8 +44,11 @@ export const InitUploadBody = z
     /**
      * Client-declared size. Used ONLY for the cap check, so a bad actor cannot get a URL for a
      * huge file. The size actually recorded comes from storage at `complete`.
+     *
+     * Zero is legal: an empty file is ordinary, and rejecting it with a validation error the user
+     * cannot act on is the surprise `06-edge-cases.md` decided against. See CCP-5.
      */
-    sizeBytes: z.number().int().positive(),
+    sizeBytes: z.number().int().nonnegative(),
     mimeType: AllowedMimeType,
   })
   .strict();
