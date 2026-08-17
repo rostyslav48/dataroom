@@ -4,7 +4,7 @@ import { Test } from '@nestjs/testing';
 import type { Request } from 'express';
 import { DataSource } from 'typeorm';
 import { AppModule } from '../../src/app.module';
-import { GoogleAuthGuard } from '../../src/auth/google-auth.guard';
+import { GoogleCallbackGuard, GoogleStartGuard } from '../../src/auth/google-auth.guard';
 import { configureApp } from '../../src/bootstrap';
 import { AppConfig } from '../../src/config/app.config';
 import { UserEntity } from '../../src/database/entities';
@@ -40,32 +40,44 @@ const googleProfile: { current: GoogleIdentity | null } = { current: null };
  * stubbed past.
  */
 @Injectable()
-class TestGoogleAuthGuard implements CanActivate {
-  private readonly real: GoogleAuthGuard;
+class TestGoogleStartGuard implements CanActivate {
+  private readonly real: GoogleStartGuard;
 
   constructor(config: AppConfig) {
-    this.real = new GoogleAuthGuard(config);
+    this.real = new GoogleStartGuard(config);
   }
 
   canActivate(context: ExecutionContext): boolean {
-    const request = context.switchToHttp().getRequest<Request & { user?: unknown }>();
-
-    // Mints the nonce cookie on the way out; rejects a bad `returnTo` on either leg.
+    // The real thing: validates `returnTo` and mints the nonce cookie.
     this.real.getAuthenticateOptions(context);
+    return true;
+  }
+}
 
-    if (request.path.endsWith('/callback')) {
-      this.real.verifyState(context);
-      if (googleProfile.current) request.user = googleProfile.current;
-    }
+@Injectable()
+class TestGoogleCallbackGuard implements CanActivate {
+  private readonly real: GoogleCallbackGuard;
 
+  constructor(config: AppConfig) {
+    this.real = new GoogleCallbackGuard(config);
+  }
+
+  canActivate(context: ExecutionContext): boolean {
+    // The real state check, unmodified — this is the login-CSRF defence under test.
+    this.real.verifyState(context);
+
+    const request = context.switchToHttp().getRequest<Request & { user?: unknown }>();
+    if (googleProfile.current) request.user = googleProfile.current;
     return true;
   }
 }
 
 export async function createTestHarness(): Promise<TestHarness> {
   const moduleRef = await Test.createTestingModule({ imports: [AppModule] })
-    .overrideGuard(GoogleAuthGuard)
-    .useClass(TestGoogleAuthGuard)
+    .overrideGuard(GoogleStartGuard)
+    .useClass(TestGoogleStartGuard)
+    .overrideGuard(GoogleCallbackGuard)
+    .useClass(TestGoogleCallbackGuard)
     .compile();
 
   const app = moduleRef.createNestApplication({ logger: false });

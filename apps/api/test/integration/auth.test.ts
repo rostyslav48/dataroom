@@ -245,6 +245,26 @@ describe('auth', () => {
           .expect(403);
       });
 
+      it.each([
+        ['a trailing slash', `${endpoints.auth.googleCallback.path}/`],
+        ['different casing', endpoints.auth.googleCallback.path.replace('callback', 'CALLBACK')],
+      ])('cannot be reached by %s to skip the state check', async (_label, path) => {
+        // Express matches routes non-strictly and case-insensitively by default, and passport
+        // decides to exchange the code from `req.query.code` rather than from the path — so a
+        // spelling variant used to reach the handler with the state check skipped. One canonical
+        // spelling per route, and the check no longer keys off the path at all.
+        harness.googleProfile.current = googleIdentity();
+        const { cookie } = await startFlow();
+
+        const response = await request(httpServer(harness))
+          .get(url(path))
+          .query({ code: 'an-attackers-authorization-code', state: 'anything' })
+          .set('Cookie', cookie);
+
+        expect(response.status).toBe(404);
+        expect(refreshCookie(response.headers as Record<string, unknown>)).toBeUndefined();
+      });
+
       it('consumes the nonce, so a captured callback cannot be replayed', async () => {
         harness.googleProfile.current = googleIdentity();
         const { cookie, nonce } = await startFlow();

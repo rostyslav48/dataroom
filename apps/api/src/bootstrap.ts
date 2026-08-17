@@ -11,6 +11,16 @@ import type { AppConfig } from './config/app.config';
  * things about an application that is not the one deployed.
  */
 export function configureApp(app: INestApplication, config: AppConfig): void {
+  // Defence in depth for the OAuth callback: Express matches routes non-strictly and
+  // case-insensitively by default, so `…/callback/` and `…/CALLBACK` reach the same handler. The
+  // guards no longer discriminate on the path string, but one canonical spelling per route is
+  // worth having anyway — variants become 404s instead of second entrances.
+  const httpAdapter = app.getHttpAdapter().getInstance() as {
+    set?: (setting: string, value: unknown) => void;
+  };
+  httpAdapter.set?.('strict routing', true);
+  httpAdapter.set?.('case sensitive routing', true);
+
   app.setGlobalPrefix(API_BASE);
   app.use(cookieParser());
   app.use(helmet());

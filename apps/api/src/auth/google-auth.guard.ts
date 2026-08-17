@@ -12,40 +12,28 @@ export const OAUTH_STATE_COOKIE = 'oauth_state';
 const STATE_TTL_MS = 10 * 60 * 1000;
 
 /**
- * Wraps passport's Google guard for two reasons, both of them security rather than convenience:
+ * Shared behaviour for the two legs of the Google flow. Neither leg decides which it is — the route
+ * declaration does, by choosing a guard.
  *
- * 1. `returnTo` is validated before it is handed to Google, because an unvalidated one here is the
- *    textbook open redirect.
- * 2. A nonce is minted into a cookie and echoed through `state`, and the callback is rejected
- *    unless the two match. `passport-oauth2` installs a `NullStore` when no session store is
- *    configured — its `verify` returns true unconditionally — so without this check the callback
- *    accepts any `state` at all, and a login-CSRF hands the victim a session belonging to the
- *    attacker.
+ * An earlier version of this file had one guard that branched on
+ * `request.path.endsWith('/callback')`. Express routes non-strictly and case-insensitively by
+ * default, so `…/callback/` and `…/CALLBACK` reached the same handler with a path that failed that
+ * test, while `passport-oauth2` still performed the code exchange — it picks its branch from
+ * `req.query.code`, never from the path. The state check was therefore skippable by appending one
+ * character, which is the whole login-CSRF back again. Two guards, each doing one thing
+ * unconditionally, removes the class of bug rather than patching the instance.
  */
-@Injectable()
-export class GoogleAuthGuard extends AuthGuard('google') {
-  constructor(private readonly config: AppConfig) {
+abstract class GoogleOAuthGuard extends AuthGuard('google') {
+  constructor(protected readonly config: AppConfig) {
     super();
   }
 
-  override async canActivate(context: ExecutionContext): Promise<boolean> {
-    const request = context.switchToHttp().getRequest<Request>();
-
-    if (request.path.endsWith('/callback')) {
-      this.verifyState(context);
-    }
-
-    return (await super.canActivate(context)) as boolean;
-  }
-
   /**
-   * Called by passport on the way out. Mints the nonce, stores it, and packs it into `state`
-   * alongside the validated `returnTo`.
+   * `returnTo` leaves our control entirely — it is handed to Google and comes back through a
+   * redirect — so it is validated here on the way out, and again in `returnToFromState` on the way
+   * back in. This is the canonical location of an open-redirect bug.
    */
-  override getAuthenticateOptions(context: ExecutionContext): IAuthModuleOptions {
-    const request = context.switchToHttp().getRequest<Request>();
-    const response = context.switchToHttp().getResponse<Response>();
-
+  protected validatedReturnTo(request: Request): string | undefined {
     const raw = request.query.returnTo;
     const result = GoogleAuthQuery.safeParse(raw === undefined ? {} : { returnTo: String(raw) });
 
@@ -55,21 +43,67 @@ export class GoogleAuthGuard extends AuthGuard('google') {
         'That return path is not allowed.',
       );
     }
+    return result.data.returnTo;
+  }
 
-    if (request.path.endsWith('/callback')) return {};
-
-    const nonce = randomBytes(18).toString('base64url');
-    response.cookie(OAUTH_STATE_COOKIE, nonce, {
+  protected cookieOptions(): {
+    httpOnly: true;
+    secure: boolean;
+    sameSite: 'lax';
+    path: string;
+  } {
+    return {
       httpOnly: true,
       secure: this.config.cookie.secure,
       // Lax, not None: the callback is a top-level GET navigation from Google, which Lax allows,
       // and Lax is the stricter of the two that still works.
       sameSite: 'lax',
       path: this.config.cookie.path,
-      maxAge: STATE_TTL_MS,
-    });
+    };
+  }
+}
 
-    return { state: encodeState(result.data.returnTo, nonce) };
+/**
+ * The outbound leg. Mints a nonce into a short-lived cookie and packs it into `state` alongside the
+ * validated `returnTo`.
+ */
+@Injectable()
+export class GoogleStartGuard extends GoogleOAuthGuard {
+  constructor(config: AppConfig) {
+    super(config);
+  }
+
+  override getAuthenticateOptions(context: ExecutionContext): IAuthModuleOptions {
+    const request = context.switchToHttp().getRequest<Request>();
+    const response = context.switchToHttp().getResponse<Response>();
+
+    const returnTo = this.validatedReturnTo(request);
+    const nonce = randomBytes(18).toString('base64url');
+
+    response.cookie(OAUTH_STATE_COOKIE, nonce, { ...this.cookieOptions(), maxAge: STATE_TTL_MS });
+
+    return { state: encodeState(returnTo, nonce) };
+  }
+}
+
+/**
+ * The inbound leg. Verifies the nonce **before** passport exchanges the authorization code, so a
+ * forged callback never reaches Google's token endpoint with our client secret.
+ */
+@Injectable()
+export class GoogleCallbackGuard extends GoogleOAuthGuard {
+  constructor(config: AppConfig) {
+    super(config);
+  }
+
+  override async canActivate(context: ExecutionContext): Promise<boolean> {
+    this.verifyState(context);
+    return (await super.canActivate(context)) as boolean;
+  }
+
+  /** No options on the way back: `state` is ours to check, not passport's to re-send. */
+  override getAuthenticateOptions(): IAuthModuleOptions {
+    return {};
   }
 
   /** Public so the test harness exercises the real check rather than stubbing past it. */
@@ -82,12 +116,7 @@ export class GoogleAuthGuard extends AuthGuard('google') {
     const presented = stateNonceOf(request.query.state);
 
     // Consume it either way: a nonce that survives a failed attempt is a nonce worth retrying.
-    response.clearCookie(OAUTH_STATE_COOKIE, {
-      httpOnly: true,
-      secure: this.config.cookie.secure,
-      sameSite: 'lax',
-      path: this.config.cookie.path,
-    });
+    response.clearCookie(OAUTH_STATE_COOKIE, this.cookieOptions());
 
     if (presented === null || !nonceMatches(expected, presented)) {
       throw errors.forbidden('That sign-in link has expired. Start again from the login page.');

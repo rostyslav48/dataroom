@@ -4,7 +4,7 @@ import { endpoints, type MeResponse, type RefreshResponse } from '@dataroom/cont
 import { AppConfig } from '../config/app.config';
 import type { GoogleIdentity } from '../users/users.service';
 import { AuthService } from './auth.service';
-import { GoogleAuthGuard } from './google-auth.guard';
+import { GoogleCallbackGuard, GoogleStartGuard } from './google-auth.guard';
 import { CurrentIdentity, type Identity } from './identity';
 import { Public } from './public.decorator';
 import { returnToFromState } from './return-to';
@@ -22,7 +22,7 @@ export class AuthController {
 
   /** Redirects to Google. `returnTo` is validated by the guard and packed into `state`. */
   @Public()
-  @UseGuards(GoogleAuthGuard)
+  @UseGuards(GoogleStartGuard)
   @Get(endpoints.auth.googleStart.path)
   googleStart(): void {
     // Passport issues the redirect; this body never runs.
@@ -36,7 +36,7 @@ export class AuthController {
    * `/auth/refresh` once on boot and holds the result in memory.
    */
   @Public()
-  @UseGuards(GoogleAuthGuard)
+  @UseGuards(GoogleCallbackGuard)
   @Get(endpoints.auth.googleCallback.path)
   async googleCallback(@Req() request: Request, @Res() response: Response): Promise<void> {
     const identity = request.user as GoogleIdentity;

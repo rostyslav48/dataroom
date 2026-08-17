@@ -7,6 +7,7 @@ import { RefreshTokenEntity } from '../database/entities';
 import { UsersModule } from '../users/users.module';
 import { AuthController } from './auth.controller';
 import { AuthService } from './auth.service';
+import { GoogleCallbackGuard, GoogleStartGuard } from './google-auth.guard';
 import { GoogleStrategy } from './google.strategy';
 import { JwtAuthGuard } from './jwt-auth.guard';
 import { TokensService } from './tokens.service';
@@ -23,6 +24,8 @@ import { TokensService } from './tokens.service';
     AuthService,
     TokensService,
     GoogleStrategy,
+    GoogleStartGuard,
+    GoogleCallbackGuard,
     // Global: every endpoint is authenticated unless it says otherwise.
     { provide: APP_GUARD, useClass: JwtAuthGuard },
   ],
