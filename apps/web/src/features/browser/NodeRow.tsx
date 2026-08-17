@@ -5,18 +5,27 @@ import { NodeSizeCell } from './NodeSizeCell';
 import { NodeUpdatedCell } from './NodeUpdatedCell';
 import { NodeActionsMenu, type NodeActions } from './NodeActionsMenu';
 
+/**
+ * Inline renaming, as one optional bundle. A page that cannot rename — a shared view, or one
+ * whose mutation is not wired — passes nothing, and the cell has no edit mode at all rather than
+ * a handler that quietly does nothing.
+ */
+export interface RenameController {
+  activeId: string | null;
+  error?: string | null | undefined;
+  busy?: boolean | undefined;
+  onCommit: (node: NodeListItem, name: string) => void;
+  onCancel: () => void;
+}
+
 export interface NodeRowProps {
   node: NodeListItem;
   /** Absent for a viewer: `SharedLayout` omits mutation controls entirely, never disabled ones. */
   actions?: NodeActions | undefined;
-  isRenaming: boolean;
-  renameError?: string | null | undefined;
-  renameBusy?: boolean | undefined;
+  rename?: RenameController | undefined;
   isSelected: boolean;
   onSelect: (node: NodeListItem) => void;
   onOpen: (node: NodeListItem) => void;
-  onRenameCommit: (node: NodeListItem, name: string) => void;
-  onRenameCancel: () => void;
 }
 
 export const NODE_ROW_HEIGHT = 44;
@@ -24,15 +33,12 @@ export const NODE_ROW_HEIGHT = 44;
 export function NodeRow({
   node,
   actions,
-  isRenaming,
-  renameError,
-  renameBusy,
+  rename,
   isSelected,
   onSelect,
   onOpen,
-  onRenameCommit,
-  onRenameCancel,
 }: NodeRowProps): JSX.Element {
+  const isRenaming = rename !== undefined && rename.activeId === node.id;
   return (
     <div
       role="row"
@@ -50,15 +56,17 @@ export function NodeRow({
         <NodeNameCell
           node={node}
           isRenaming={isRenaming}
-          renameError={renameError}
-          renameBusy={renameBusy ?? false}
+          renameError={isRenaming ? rename?.error : null}
+          renameBusy={isRenaming ? rename?.busy : false}
           onOpen={() => {
             onOpen(node);
           }}
           onRenameCommit={(name) => {
-            onRenameCommit(node, name);
+            rename?.onCommit(node, name);
           }}
-          onRenameCancel={onRenameCancel}
+          onRenameCancel={() => {
+            rename?.onCancel();
+          }}
         />
       </div>
       <div role="gridcell" className="hidden sm:block">

@@ -5,6 +5,7 @@ import { fixtures, type NodeListItem } from '@dataroom/contracts';
 import { renderWithProviders } from '@/test/harness';
 import { ApiClientError } from '@/lib/api';
 import { NodeTable, type NodeTableProps } from './NodeTable';
+import type { RenameController } from './NodeRow';
 
 const folder: NodeListItem = fixtures.nodes.financials;
 const file: NodeListItem = fixtures.nodes.overview;
@@ -28,10 +29,6 @@ function setup(overrides: Partial<NodeTableProps> = {}): NodeTableProps {
       onDelete: vi.fn(),
     },
     onOpen: vi.fn(),
-    renamingId: null,
-    renameError: null,
-    onRenameCommit: vi.fn(),
-    onRenameCancel: vi.fn(),
     ...overrides,
   };
   renderWithProviders(<NodeTable {...props} />);
@@ -140,43 +137,60 @@ describe('NodeTable', () => {
   });
 });
 
+function renameProps(overrides: Partial<RenameController> = {}): { rename: RenameController } {
+  return {
+    rename: {
+      activeId: folder.id,
+      error: null,
+      onCommit: vi.fn(),
+      onCancel: vi.fn(),
+      ...overrides,
+    },
+  };
+}
+
 describe('NodeTable inline rename', () => {
   it('swaps the name for an input, commits on Enter', async () => {
-    const props = setup({ renamingId: folder.id });
+    const props = setup(renameProps());
     const input = screen.getByLabelText('Rename Financials');
     await userEvent.clear(input);
     await userEvent.type(input, 'Finance{Enter}');
-    expect(props.onRenameCommit).toHaveBeenCalledWith(folder, 'Finance');
+    expect(props.rename?.onCommit).toHaveBeenCalledWith(folder, 'Finance');
   });
 
   it('cancels on Escape without committing', async () => {
-    const props = setup({ renamingId: folder.id });
+    const props = setup(renameProps());
     const input = screen.getByLabelText('Rename Financials');
     await userEvent.type(input, 'anything{Escape}');
-    expect(props.onRenameCancel).toHaveBeenCalledTimes(1);
-    expect(props.onRenameCommit).not.toHaveBeenCalled();
+    expect(props.rename?.onCancel).toHaveBeenCalledTimes(1);
+    expect(props.rename?.onCommit).not.toHaveBeenCalled();
   });
 
   it('commits on blur', async () => {
-    const props = setup({ renamingId: folder.id });
+    const props = setup(renameProps());
     const input = screen.getByLabelText('Rename Financials');
     await userEvent.clear(input);
     await userEvent.type(input, 'Blurred');
     await userEvent.tab();
-    expect(props.onRenameCommit).toHaveBeenCalledWith(folder, 'Blurred');
+    expect(props.rename?.onCommit).toHaveBeenCalledWith(folder, 'Blurred');
   });
 
   it('keeps the input open with the typed text and an inline error on conflict', () => {
-    setup({ renamingId: folder.id, renameError: 'That name is already taken' });
+    setup(renameProps({ error: 'That name is already taken' }));
     expect(screen.getByLabelText('Rename Financials')).toBeInTheDocument();
     expect(screen.getByRole('alert')).toHaveTextContent('That name is already taken');
   });
 
   it('commits only once even if blur follows Enter', async () => {
-    const props = setup({ renamingId: folder.id });
+    const props = setup(renameProps());
     const input = screen.getByLabelText('Rename Financials');
     await userEvent.type(input, '{Enter}');
     await userEvent.tab();
-    expect(props.onRenameCommit).toHaveBeenCalledTimes(1);
+    expect(props.rename?.onCommit).toHaveBeenCalledTimes(1);
+  });
+
+  it('offers no inline edit mode when no rename controller is supplied', () => {
+    setup();
+    expect(screen.queryByLabelText('Rename Financials')).not.toBeInTheDocument();
   });
 });

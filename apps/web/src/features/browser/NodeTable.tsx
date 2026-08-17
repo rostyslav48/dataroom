@@ -1,6 +1,6 @@
 import { useState, type ReactNode } from 'react';
 import type { NodeListItem, NodeSortField } from '@dataroom/contracts';
-import { NodeRow } from './NodeRow';
+import { NodeRow, type RenameController } from './NodeRow';
 import type { NodeActions } from './NodeActionsMenu';
 import { NodeTableHeader } from './NodeTableHeader';
 import { EmptyFolderState, ListErrorState, SkeletonRows } from './states';
@@ -17,11 +17,8 @@ export interface NodeTableProps {
   canManage: boolean;
   actions?: NodeActions | undefined;
   onOpen: (node: NodeListItem) => void;
-  renamingId?: string | null | undefined;
-  renameError?: string | null | undefined;
-  renameBusy?: boolean | undefined;
-  onRenameCommit: (node: NodeListItem, name: string) => void;
-  onRenameCancel: () => void;
+  /** Omitted where renaming is not offered; there is then no inline edit mode at all. */
+  rename?: RenameController | undefined;
   onNewFolder?: (() => void) | undefined;
   /** Load-more sentinel and its own loading/error states, supplied by the page. */
   footer?: ReactNode;
@@ -42,11 +39,7 @@ export function NodeTable({
   canManage,
   actions,
   onOpen,
-  renamingId,
-  renameError,
-  renameBusy,
-  onRenameCommit,
-  onRenameCancel,
+  rename,
   onNewFolder,
   footer,
 }: NodeTableProps): JSX.Element {
@@ -65,16 +58,12 @@ export function NodeTable({
             key={node.id}
             node={node}
             actions={canManage ? actions : undefined}
-            isRenaming={renamingId === node.id}
-            renameError={renamingId === node.id ? renameError : null}
-            renameBusy={renamingId === node.id ? renameBusy : false}
+            rename={canManage ? rename : undefined}
             isSelected={selectedId === node.id}
             onSelect={(selected) => {
               setSelectedId(selected.id);
             }}
             onOpen={onOpen}
-            onRenameCommit={onRenameCommit}
-            onRenameCancel={onRenameCancel}
           />
         ))}
       </div>
