@@ -7,6 +7,7 @@ import { errorMap, presentError } from '@/lib/errorMap';
 import { Breadcrumbs } from './Breadcrumbs';
 import { FolderToolbar } from './FolderToolbar';
 import { LoadMoreSentinel } from './LoadMoreSentinel';
+import { DeleteConfirmDialog } from './DeleteConfirmDialog';
 import { NewFolderDialog } from './NewFolderDialog';
 import { NodeTable } from './NodeTable';
 import { SkeletonRows } from './states';
@@ -33,6 +34,7 @@ export function FolderPage({ nodeId, context }: FolderPageProps): JSX.Element {
   const [sort, setSort] = useState<NodeSortField>('name');
   const [dir, setDir] = useState<'asc' | 'desc'>('asc');
   const [newFolderOpen, setNewFolderOpen] = useState(false);
+  const [deleteTarget, setDeleteTarget] = useState<NodeListItem | null>(null);
   const [renamingId, setRenamingId] = useState<string | null>(null);
   const [renameError, setRenameError] = useState<string | null>(null);
 
@@ -120,6 +122,9 @@ export function FolderPage({ nodeId, context }: FolderPageProps): JSX.Element {
           setRenamingId(node.id);
           setRenameError(null);
         },
+        onDelete: (node) => {
+          setDeleteTarget(node);
+        },
       }
     : undefined;
 
@@ -185,7 +190,17 @@ export function FolderPage({ nodeId, context }: FolderPageProps): JSX.Element {
       />
 
       {canManage ? (
-        <NewFolderDialog open={newFolderOpen} onOpenChange={setNewFolderOpen} parentId={nodeId} />
+        <>
+          <NewFolderDialog open={newFolderOpen} onOpenChange={setNewFolderOpen} parentId={nodeId} />
+          <DeleteConfirmDialog
+            open={deleteTarget !== null}
+            onOpenChange={(next) => {
+              if (!next) setDeleteTarget(null);
+            }}
+            node={deleteTarget}
+            parentId={nodeId}
+          />
+        </>
       ) : null}
     </div>
   );
