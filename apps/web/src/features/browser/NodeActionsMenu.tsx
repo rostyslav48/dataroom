@@ -2,12 +2,16 @@ import { Download, FolderInput, MoreHorizontal, Pencil, Share2, Trash2 } from 'l
 import type { NodeListItem } from '@dataroom/contracts';
 import { DropdownMenu, type MenuItemSpec } from '@/components/ui/DropdownMenu';
 
+/**
+ * Each action is optional and an absent one is simply not offered. A menu item that opens nothing
+ * is worse than a shorter menu, and "don't include unimplemented features" applies per control.
+ */
 export interface NodeActions {
-  onRename: (node: NodeListItem) => void;
-  onMove: (node: NodeListItem) => void;
-  onShare: (node: NodeListItem) => void;
-  onDownload: (node: NodeListItem) => void;
-  onDelete: (node: NodeListItem) => void;
+  onRename?: ((node: NodeListItem) => void) | undefined;
+  onMove?: ((node: NodeListItem) => void) | undefined;
+  onShare?: ((node: NodeListItem) => void) | undefined;
+  onDownload?: ((node: NodeListItem) => void) | undefined;
+  onDelete?: ((node: NodeListItem) => void) | undefined;
 }
 
 export interface NodeActionsMenuProps {
@@ -15,58 +19,65 @@ export interface NodeActionsMenuProps {
   actions: NodeActions;
 }
 
-/**
- * Download is offered for files only. Folders have no download endpoint — server-side zipping is
- * out of scope — so the item is absent rather than present-and-broken.
- */
-export function NodeActionsMenu({ node, actions }: NodeActionsMenuProps): JSX.Element {
-  const items: MenuItemSpec[] = [
-    {
+export function NodeActionsMenu({ node, actions }: NodeActionsMenuProps): JSX.Element | null {
+  const items: MenuItemSpec[] = [];
+  const { onRename, onMove, onShare, onDownload, onDelete } = actions;
+
+  if (onRename !== undefined) {
+    items.push({
       key: 'rename',
       label: 'Rename',
       icon: <Pencil aria-hidden="true" className="h-4 w-4" />,
+      movesFocus: true,
       onSelect: () => {
-        actions.onRename(node);
+        onRename(node);
       },
-    },
-    {
+    });
+  }
+  if (onMove !== undefined) {
+    items.push({
       key: 'move',
       label: 'Move',
       icon: <FolderInput aria-hidden="true" className="h-4 w-4" />,
       onSelect: () => {
-        actions.onMove(node);
+        onMove(node);
       },
-    },
-    {
+    });
+  }
+  if (onShare !== undefined) {
+    items.push({
       key: 'share',
       label: 'Share',
       icon: <Share2 aria-hidden="true" className="h-4 w-4" />,
       onSelect: () => {
-        actions.onShare(node);
+        onShare(node);
       },
-    },
-  ];
-
-  if (node.type === 'file') {
+    });
+  }
+  // Download exists for files only: there is no endpoint that zips a folder.
+  if (onDownload !== undefined && node.type === 'file') {
     items.push({
       key: 'download',
       label: 'Download',
       icon: <Download aria-hidden="true" className="h-4 w-4" />,
       onSelect: () => {
-        actions.onDownload(node);
+        onDownload(node);
+      },
+    });
+  }
+  if (onDelete !== undefined) {
+    items.push({
+      key: 'delete',
+      label: 'Delete',
+      icon: <Trash2 aria-hidden="true" className="h-4 w-4" />,
+      destructive: true,
+      onSelect: () => {
+        onDelete(node);
       },
     });
   }
 
-  items.push({
-    key: 'delete',
-    label: 'Delete',
-    icon: <Trash2 aria-hidden="true" className="h-4 w-4" />,
-    destructive: true,
-    onSelect: () => {
-      actions.onDelete(node);
-    },
-  });
+  if (items.length === 0) return null;
 
   return (
     <DropdownMenu

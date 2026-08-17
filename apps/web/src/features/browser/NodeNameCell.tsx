@@ -40,7 +40,17 @@ export function NodeNameCell({
   }, [isRenaming, node.name]);
 
   useEffect(() => {
-    if (isRenaming) inputRef.current?.select();
+    if (!isRenaming) return;
+    // Focus is taken on the next task, not synchronously: the action menu that opened this field
+    // is still unmounting, and its focus scope moves focus as it goes. Grabbing focus first would
+    // simply be overridden — and the resulting blur would commit an edit the user never made.
+    const timer = setTimeout(() => {
+      inputRef.current?.focus();
+      inputRef.current?.select();
+    }, 0);
+    return () => {
+      clearTimeout(timer);
+    };
   }, [isRenaming]);
 
   if (isRenaming) {

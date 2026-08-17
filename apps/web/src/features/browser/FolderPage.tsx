@@ -1,15 +1,19 @@
 import { useCallback, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import type { NodeListItem, NodeSortField } from '@dataroom/contracts';
+import { ResourceName, type NodeListItem, type NodeSortField } from '@dataroom/contracts';
 import { StateBlock } from '@/components/ui/StateBlock';
-import { presentError } from '@/lib/errorMap';
+import { isApiClientError } from '@/lib/api';
+import { errorMap, presentError } from '@/lib/errorMap';
 import { Breadcrumbs } from './Breadcrumbs';
 import { FolderToolbar } from './FolderToolbar';
 import { LoadMoreSentinel } from './LoadMoreSentinel';
+import { NewFolderDialog } from './NewFolderDialog';
 import { NodeTable } from './NodeTable';
 import { SkeletonRows } from './states';
 import { filePath, folderPath, shareTokenOf, type BrowseContext } from './browseContext';
 import { useChildren, useNodeDetail } from './useNodeQueries';
+import { useRenameNode } from './mutations';
+import type { NodeActions } from './NodeActionsMenu';
 
 export interface FolderPageProps {
   nodeId: string;
@@ -28,9 +32,13 @@ export function FolderPage({ nodeId, context }: FolderPageProps): JSX.Element {
   const shareToken = shareTokenOf(context);
   const [sort, setSort] = useState<NodeSortField>('name');
   const [dir, setDir] = useState<'asc' | 'desc'>('asc');
+  const [newFolderOpen, setNewFolderOpen] = useState(false);
+  const [renamingId, setRenamingId] = useState<string | null>(null);
+  const [renameError, setRenameError] = useState<string | null>(null);
 
   const detail = useNodeDetail(nodeId, shareToken);
   const children = useChildren(nodeId, { sort, dir }, shareToken);
+  const rename = useRenameNode(nodeId);
 
   const openNode = useCallback(
     (node: NodeListItem) => {
@@ -39,6 +47,39 @@ export function FolderPage({ nodeId, context }: FolderPageProps): JSX.Element {
       );
     },
     [context, navigate],
+  );
+
+  const commitRename = useCallback(
+    (node: NodeListItem, name: string) => {
+      if (name === node.name) {
+        setRenamingId(null);
+        setRenameError(null);
+        return;
+      }
+      const parsed = ResourceName.safeParse(name);
+      if (!parsed.success) {
+        setRenameError(parsed.error.issues[0]?.message ?? 'Enter a valid name');
+        return;
+      }
+      rename.mutate(
+        { node, name: parsed.data },
+        {
+          onSuccess: () => {
+            setRenamingId(null);
+            setRenameError(null);
+          },
+          onError: (error) => {
+            // The input stays open with the typed text; a toast here would lose the user's work.
+            setRenameError(
+              isApiClientError(error) && error.code === 'NAME_CONFLICT'
+                ? errorMap('NAME_CONFLICT').body
+                : presentError(error).title,
+            );
+          },
+        },
+      );
+    },
+    [rename],
   );
 
   if (detail.isPending) {
@@ -69,6 +110,18 @@ export function FolderPage({ nodeId, context }: FolderPageProps): JSX.Element {
 
   const canManage = detail.data.access === 'owner';
   const items = children.data?.pages.flatMap((page) => page.items) ?? [];
+  const openNewFolder = (): void => {
+    setNewFolderOpen(true);
+  };
+
+  const actions: NodeActions | undefined = canManage
+    ? {
+        onRename: (node) => {
+          setRenamingId(node.id);
+          setRenameError(null);
+        },
+      }
+    : undefined;
 
   return (
     <div className="mx-auto max-w-5xl">
@@ -83,6 +136,7 @@ export function FolderPage({ nodeId, context }: FolderPageProps): JSX.Element {
         folderName={detail.data.node.name}
         fileCount={detail.data.node.subtreeFileCount}
         sizeBytes={detail.data.node.subtreeSizeBytes}
+        onNewFolder={canManage ? openNewFolder : undefined}
       />
 
       <NodeTable
@@ -101,7 +155,23 @@ export function FolderPage({ nodeId, context }: FolderPageProps): JSX.Element {
           setDir(nextDir);
         }}
         canManage={canManage}
+        actions={actions}
         onOpen={openNode}
+        rename={
+          canManage
+            ? {
+                activeId: renamingId,
+                error: renameError,
+                busy: rename.isPending,
+                onCommit: commitRename,
+                onCancel: () => {
+                  setRenamingId(null);
+                  setRenameError(null);
+                },
+              }
+            : undefined
+        }
+        onNewFolder={canManage ? openNewFolder : undefined}
         footer={
           <LoadMoreSentinel
             hasNextPage={children.hasNextPage}
@@ -113,6 +183,10 @@ export function FolderPage({ nodeId, context }: FolderPageProps): JSX.Element {
           />
         }
       />
+
+      {canManage ? (
+        <NewFolderDialog open={newFolderOpen} onOpenChange={setNewFolderOpen} parentId={nodeId} />
+      ) : null}
     </div>
   );
 }
