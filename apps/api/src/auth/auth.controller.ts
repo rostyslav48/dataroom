@@ -7,7 +7,7 @@ import { AuthService } from './auth.service';
 import { GoogleAuthGuard } from './google-auth.guard';
 import { CurrentIdentity, type Identity } from './identity';
 import { Public } from './public.decorator';
-import { decodeState } from './return-to';
+import { returnToFromState } from './return-to';
 
 /**
  * Routes are declared from the contract's `endpoints` rather than from string literals, so a path
@@ -43,7 +43,7 @@ export class AuthController {
     const { refreshToken } = await this.auth.signInWithGoogle(identity);
 
     this.setRefreshCookie(response, refreshToken);
-    response.redirect(`${this.config.webOrigin}${decodeState(request.query.state)}`);
+    response.redirect(`${this.config.webOrigin}${returnToFromState(request.query.state)}`);
   }
 
   @Public()

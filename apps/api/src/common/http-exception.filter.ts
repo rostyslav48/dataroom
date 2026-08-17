@@ -72,10 +72,9 @@ export function toDomainError(exception: unknown): DomainError {
     return errors.internal('That change conflicts with existing data.');
   }
   if (driverError?.code === PG_CHECK_VIOLATION) {
-    return errors.validationFailed(
-      { _root: [driverError.constraint ?? 'A database constraint rejected this value.'] },
-      'That value is not allowed.',
-    );
+    // The constraint name stays in the log line, not in the response: it names internal schema
+    // objects, and the client can do nothing with it.
+    return errors.validationFailed({ _root: ['That value is not allowed.'] }, 'That value is not allowed.');
   }
 
   if (exception instanceof HttpException) {

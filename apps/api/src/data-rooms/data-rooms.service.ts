@@ -69,7 +69,10 @@ export class DataRoomsService {
       this.dataSource,
       `SELECT DISTINCT ON (r.id)
               r.id,
-              r.name,
+              -- The share root's name, not the room's. A room and its root node share a name, so
+              -- returning the room name here would hand a viewer the name of the topmost ancestor
+              -- — exactly what truncating their breadcrumbs at the share root exists to withhold.
+              sn.name      AS name,
               sn.id        AS "rootNodeId",
               r.owner_id   AS "ownerId",
               u.name       AS "ownerName",
@@ -86,7 +89,7 @@ export class DataRoomsService {
         WHERE s.type = 'permissioned'
           AND s.revoked_at IS NULL
           AND (s.expires_at IS NULL OR s.expires_at > now())
-          AND (rec.user_id = $1::uuid OR rec.email = $2::text)
+          AND (rec.user_id = $1::uuid OR (rec.user_id IS NULL AND rec.email = $2::citext))
           AND r.owner_id <> $1::uuid
         -- Several shares in one room collapse to a single entry at the shallowest of them; a room
         -- listed twice under the same id would be a duplicate the UI cannot key apart.
@@ -104,7 +107,8 @@ export class DataRoomsService {
     const [row] = await selectRows<RoomRow>(
       this.dataSource,
       `SELECT r.id,
-              r.name,
+              -- Owners see the room's name; a viewer sees only the node they were given.
+              (CASE WHEN $3::boolean THEN r.name ELSE entry.name END) AS name,
               entry.id                     AS "rootNodeId",
               r.owner_id                   AS "ownerId",
               u.name                       AS "ownerName",
@@ -115,9 +119,13 @@ export class DataRoomsService {
               r.updated_at                 AS "updatedAt"
          FROM data_rooms r
          JOIN users u    ON u.id = r.owner_id
-         JOIN nodes entry ON entry.id = $2 AND entry.deleted_at IS NULL
+         JOIN nodes entry ON entry.id = $2
+                        AND entry.data_room_id = r.id
+                        AND entry.deleted_at IS NULL
         WHERE r.id = $1 AND r.deleted_at IS NULL`,
-      [roomId, access.shareRootId],
+      // The guard has already decided the role; the query honours that decision rather than
+      // re-deriving ownership from the row.
+      [roomId, access.shareRootId, access.role === 'owner'],
     );
 
     if (!row) throw errors.itemGone();

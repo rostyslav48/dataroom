@@ -30,6 +30,13 @@ interface SortSpec {
   /** SQL expression the page is ordered by, within a type group. */
   expression: string;
   cast: string;
+  /**
+   * A cursor is client-supplied, and its sort value is bound to a `::bigint` or `::timestamptz`
+   * cast. Without this check a hand-edited cursor — or simply an old cursor reused after switching
+   * the sort — reaches Postgres as an invalid literal and comes back as a 500 instead of the 400
+   * it is.
+   */
+  accepts: (value: string) => boolean;
 }
 
 /**
@@ -52,11 +59,19 @@ interface ListRow extends NodeRow {
  * index that serves this query is built for it.
  */
 const SORTS: Record<NodeSortField, SortSpec> = {
-  name: { expression: 'lower(n.name)', cast: 'text' },
+  name: { expression: 'lower(n.name)', cast: 'text', accepts: () => true },
   // Files carry their own size; folders carry their cached subtree size. Within a type group
   // exactly one of the two is meaningful, which is why this COALESCE is safe.
-  size: { expression: 'COALESCE(n.size_bytes, n.subtree_size_bytes)', cast: 'bigint' },
-  updatedAt: { expression: 'n.updated_at', cast: 'timestamptz' },
+  size: {
+    expression: 'COALESCE(n.size_bytes, n.subtree_size_bytes)',
+    cast: 'bigint',
+    accepts: (value) => /^-?\d{1,19}$/.test(value),
+  },
+  updatedAt: {
+    expression: 'n.updated_at',
+    cast: 'timestamptz',
+    accepts: (value) => !Number.isNaN(Date.parse(value)),
+  },
 };
 
 @Injectable()
@@ -82,6 +97,7 @@ export class NodesService {
 
   async getDetail(nodeId: string, access: AccessGranted): Promise<NodeDetailResponse> {
     const node = await this.requireRow(nodeId);
+    const breadcrumbs = await this.breadcrumbs(node, access.shareRootId);
 
     const [room] = await selectRows<{ name: string }>(
       this.dataSource,
@@ -89,12 +105,19 @@ export class NodesService {
       [node.dataRoomId],
     );
 
+    // A data room and its root node share a name, so returning the room name to a viewer would hand
+    // them the name of the topmost ancestor — precisely what truncating their breadcrumbs at the
+    // share root exists to withhold. A viewer is told the name of the thing they were given, which
+    // is the first breadcrumb.
+    const dataRoomName =
+      access.role === 'owner' ? (room?.name ?? '') : (breadcrumbs[0]?.name ?? node.name);
+
     return {
       node: toNodeDto(node),
-      breadcrumbs: await this.breadcrumbs(node, access.shareRootId),
+      breadcrumbs,
       access: access.role,
       shareRootId: access.shareRootId,
-      dataRoomName: room?.name ?? '',
+      dataRoomName,
     };
   }
 
@@ -145,6 +168,12 @@ export class NodesService {
     if (query.cursor !== undefined) {
       const cursor: CursorPayload = decodeCursor(query.cursor);
       const sortValue = cursor.sortValue ?? cursor.name;
+      if (!sort.accepts(sortValue)) {
+        throw errors.validationFailed(
+          { cursor: ['Cursor does not match this sort order.'] },
+          'That cursor belongs to a different sort order.',
+        );
+      }
       params.push(cursor.type, sortValue, cursor.id);
       // Folders before files always, so the type comparison is unconditionally ascending; the
       // requested direction applies only *within* a type group. The id tiebreak stays ascending so

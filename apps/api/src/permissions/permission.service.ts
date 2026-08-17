@@ -5,7 +5,7 @@ import { Uuid } from '@dataroom/contracts';
 import type { Identity } from '../auth/identity';
 import { selectRows } from '../database/sql';
 import { selfAndAncestorIds } from '../nodes/path.util';
-import { denied, maskEmail, type Access } from './access';
+import { denied, type Access } from './access';
 
 interface NodeRow {
   id: string;
@@ -86,7 +86,9 @@ export class PermissionService {
     }
 
     const candidateIds = selfAndAncestorIds(node.path);
-    const token = identity.kind === 'anonymous' ? identity.shareToken : null;
+    // A signed-in caller may also be holding a public link — that is the ordinary case, since most
+    // people are signed into something — so the token is read from either kind of identity.
+    const token = identity.shareToken;
     const userId = identity.kind === 'user' ? identity.userId : null;
     const email = identity.kind === 'user' ? identity.email : null;
 
@@ -105,7 +107,10 @@ export class PermissionService {
                 (s.type = 'public_link'  AND $2::text IS NOT NULL AND s.token = $2::text)
              OR (s.type = 'permissioned' AND (
                       ($3::uuid IS NOT NULL AND rec.user_id = $3::uuid)
-                   OR ($4::text IS NOT NULL AND rec.email   = $4::text)
+                   -- The email arm only matches an invitation nobody has claimed yet. Once a row
+                   -- has a user_id it belongs to that identity, so a corporate address later
+                   -- reassigned to a different person does not inherit the old holder's access.
+                   OR ($4::citext IS NOT NULL AND rec.user_id IS NULL AND rec.email = $4::citext)
                  ))
           )
         ORDER BY s.role DESC
@@ -155,7 +160,7 @@ export class PermissionService {
       return { granted: true, role: 'owner', shareRootId: room.rootNodeId, shareId: null };
     }
 
-    const token = identity.kind === 'anonymous' ? identity.shareToken : null;
+    const token = identity.shareToken;
     const userId = identity.kind === 'user' ? identity.userId : null;
     const email = identity.kind === 'user' ? identity.email : null;
 
@@ -174,7 +179,10 @@ export class PermissionService {
                 (s.type = 'public_link'  AND $2::text IS NOT NULL AND s.token = $2::text)
              OR (s.type = 'permissioned' AND (
                       ($3::uuid IS NOT NULL AND rec.user_id = $3::uuid)
-                   OR ($4::text IS NOT NULL AND rec.email   = $4::text)
+                   -- The email arm only matches an invitation nobody has claimed yet. Once a row
+                   -- has a user_id it belongs to that identity, so a corporate address later
+                   -- reassigned to a different person does not inherit the old holder's access.
+                   OR ($4::citext IS NOT NULL AND rec.user_id IS NULL AND rec.email = $4::citext)
                  ))
           )
         -- Shallowest share first: it is the widest entry point the caller holds in this room.
@@ -264,9 +272,7 @@ export class PermissionService {
           (row.expiresAt === null || row.expiresAt.getTime() > now) &&
           row.recipientEmail !== null,
       );
-      if (otherInvite?.recipientEmail) {
-        return denied('WRONG_ACCOUNT', maskEmail(otherInvite.recipientEmail));
-      }
+      if (otherInvite?.recipientEmail) return denied('WRONG_ACCOUNT');
     }
 
     return denied('FORBIDDEN');

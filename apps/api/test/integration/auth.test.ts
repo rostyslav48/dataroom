@@ -39,14 +39,37 @@ describe('auth', () => {
     await harness.reset();
   });
 
+  /** The nonce the API just minted, as the browser would hold it. */
+  const startFlow = async (returnTo?: string): Promise<{ cookie: string; nonce: string }> => {
+    const response = await request(httpServer(harness))
+      .get(url(endpoints.auth.googleStart.path))
+      .query(returnTo === undefined ? {} : { returnTo })
+      .expect(200);
+
+    const raw = response.headers['set-cookie'] as unknown;
+    const cookies = Array.isArray(raw) ? (raw as string[]) : [];
+    const stateCookie = cookies.find((cookie) => cookie.startsWith('oauth_state='));
+    expect(stateCookie, 'the start route sets a state cookie').toBeDefined();
+
+    const value = cookieValue(stateCookie as string);
+    return { cookie: value, nonce: value.slice('oauth_state='.length) };
+  };
+
+  const stateFor = (nonce: string, returnTo: string | null = null): string =>
+    Buffer.from(JSON.stringify({ returnTo, nonce })).toString('base64url');
+
+  /** The whole round trip: start the flow, come back with a matching state, get a session. */
   const signIn = async (
     identity: GoogleIdentity = googleIdentity(),
-    state?: string,
+    returnTo: string | null = null,
   ): Promise<{ cookie: string; location: string }> => {
     harness.googleProfile.current = identity;
+    const { cookie: stateCookie, nonce } = await startFlow(returnTo ?? undefined);
+
     const response = await request(httpServer(harness))
       .get(url(endpoints.auth.googleCallback.path))
-      .query(state ? { state } : {})
+      .query({ state: stateFor(nonce, returnTo) })
+      .set('Cookie', stateCookie)
       .expect(302);
 
     const cookie = refreshCookie(response.headers as Record<string, unknown>);
@@ -141,8 +164,11 @@ describe('auth', () => {
 
     it('sends the refresh token as an httpOnly cookie scoped to the auth path', async () => {
       harness.googleProfile.current = googleIdentity();
+      const { cookie: stateCookie, nonce } = await startFlow();
       const response = await request(httpServer(harness))
         .get(url(endpoints.auth.googleCallback.path))
+        .query({ state: stateFor(nonce) })
+        .set('Cookie', stateCookie)
         .expect(302);
 
       const cookie = refreshCookie(response.headers as Record<string, unknown>) as string;
@@ -160,20 +186,86 @@ describe('auth', () => {
     });
 
     it('round-trips a valid returnTo through state', async () => {
-      const state = Buffer.from(JSON.stringify({ returnTo: '/rooms/abc' })).toString('base64url');
-      const { location } = await signIn(googleIdentity(), state);
+      const { location } = await signIn(googleIdentity(), '/rooms/abc');
       expect(location).toBe('http://localhost:5173/rooms/abc');
     });
 
     it.each([
       ['an absolute url', 'https://evil.com'],
       ['a protocol-relative url', '//evil.com'],
-      ['garbage', 'not-base64'],
-      ['a json non-string', JSON.stringify({ returnTo: 42 })],
+      ['a javascript scheme', 'javascript:alert(1)'],
     ])('falls back to the default when state carries %s', async (_label, returnTo) => {
-      const state = Buffer.from(JSON.stringify({ returnTo })).toString('base64url');
-      const { location } = await signIn(googleIdentity(), state);
-      expect(location).toBe('http://localhost:5173/rooms');
+      // The state is re-validated on the way back in, not merely on the way out: this is a value
+      // that left our control entirely and came back through somebody else's redirect.
+      harness.googleProfile.current = googleIdentity();
+      const { cookie, nonce } = await startFlow();
+
+      const response = await request(httpServer(harness))
+        .get(url(endpoints.auth.googleCallback.path))
+        .query({ state: stateFor(nonce, returnTo) })
+        .set('Cookie', cookie)
+        .expect(302);
+
+      expect(response.headers.location).toBe('http://localhost:5173/rooms');
+    });
+
+    describe('login CSRF', () => {
+      it('refuses a callback with no state cookie', async () => {
+        harness.googleProfile.current = googleIdentity();
+        const { nonce } = await startFlow();
+
+        // The attacker's browser holds the cookie; the victim's does not.
+        const response = await request(httpServer(harness))
+          .get(url(endpoints.auth.googleCallback.path))
+          .query({ state: stateFor(nonce) })
+          .expect(403);
+
+        expect(ApiError.parse(response.body).code).toBe('FORBIDDEN');
+        expect(refreshCookie(response.headers as Record<string, unknown>)).toBeUndefined();
+      });
+
+      it('refuses a callback whose state does not match the cookie', async () => {
+        harness.googleProfile.current = googleIdentity();
+        const { cookie } = await startFlow();
+
+        await request(httpServer(harness))
+          .get(url(endpoints.auth.googleCallback.path))
+          .query({ state: stateFor('a-nonce-from-somewhere-else') })
+          .set('Cookie', cookie)
+          .expect(403);
+      });
+
+      it('refuses a callback with no state at all', async () => {
+        harness.googleProfile.current = googleIdentity();
+        const { cookie } = await startFlow();
+
+        await request(httpServer(harness))
+          .get(url(endpoints.auth.googleCallback.path))
+          .set('Cookie', cookie)
+          .expect(403);
+      });
+
+      it('consumes the nonce, so a captured callback cannot be replayed', async () => {
+        harness.googleProfile.current = googleIdentity();
+        const { cookie, nonce } = await startFlow();
+
+        await request(httpServer(harness))
+          .get(url(endpoints.auth.googleCallback.path))
+          .query({ state: stateFor(nonce) })
+          .set('Cookie', cookie)
+          .expect(302);
+
+        // The browser was told to clear the cookie; a client that ignores that still gains nothing,
+        // because Google will not honour the same authorization code twice either.
+        const cleared = await request(httpServer(harness))
+          .get(url(endpoints.auth.googleStart.path))
+          .expect(200);
+        const raw = cleared.headers['set-cookie'] as unknown;
+        const fresh = (Array.isArray(raw) ? (raw as string[]) : []).find((c) =>
+          c.startsWith('oauth_state='),
+        );
+        expect(cookieValue(fresh as string)).not.toBe(cookie);
+      });
     });
   });
 
@@ -222,7 +314,12 @@ describe('auth', () => {
         refreshCookie(first.headers as Record<string, unknown>) as string,
       );
 
-      // Replay of the already-exchanged token.
+      // Age the exchange past the race window, so this is a replay rather than two tabs refreshing
+      // at the same moment.
+      await harness.dataSource.query(
+        `UPDATE refresh_tokens SET used_at = now() - interval '1 minute' WHERE used_at IS NOT NULL`,
+      );
+
       const replay = await request(httpServer(harness))
         .post(url(endpoints.auth.refresh.path))
         .set('Cookie', cookie)
@@ -235,6 +332,38 @@ describe('auth', () => {
         .post(url(endpoints.auth.refresh.path))
         .set('Cookie', rotated)
         .expect(401);
+    });
+
+    it('treats two tabs refreshing at the same moment as a race, not an attack', async () => {
+      const { cookie } = await signIn();
+
+      const first = await request(httpServer(harness))
+        .post(url(endpoints.auth.refresh.path))
+        .set('Cookie', cookie)
+        .expect(200);
+
+      // The second tab arrives moments later holding the same cookie. Revoking the family here
+      // would log the user out of both tabs for doing nothing wrong.
+      const second = await request(httpServer(harness))
+        .post(url(endpoints.auth.refresh.path))
+        .set('Cookie', cookie)
+        .expect(200);
+
+      const firstRotated = cookieValue(
+        refreshCookie(first.headers as Record<string, unknown>) as string,
+      );
+      const secondRotated = cookieValue(
+        refreshCookie(second.headers as Record<string, unknown>) as string,
+      );
+      expect(secondRotated).not.toBe(firstRotated);
+
+      // Both successors work, and both belong to the same live family.
+      for (const rotated of [firstRotated, secondRotated]) {
+        await request(httpServer(harness))
+          .post(url(endpoints.auth.refresh.path))
+          .set('Cookie', rotated)
+          .expect(200);
+      }
     });
 
     it('rejects a missing cookie and an unknown token', async () => {

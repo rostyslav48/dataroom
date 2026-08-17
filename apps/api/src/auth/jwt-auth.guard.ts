@@ -40,14 +40,14 @@ export class JwtAuthGuard implements CanActivate {
       context.getClass(),
     ]);
 
-    const identity = await this.identify(request);
+    const shareToken = this.shareTokenOf(request);
+    const identity = await this.identify(request, shareToken);
 
     if (identity) {
       request.identity = identity;
       return true;
     }
 
-    const shareToken = this.shareTokenOf(request);
     if (isPublic || (allowsShareToken && shareToken)) {
       request.identity = { kind: 'anonymous', shareToken };
       return true;
@@ -56,15 +56,20 @@ export class JwtAuthGuard implements CanActivate {
     throw errors.unauthenticated();
   }
 
-  private async identify(request: RequestWithIdentity): Promise<Identity | null> {
+  private async identify(
+    request: RequestWithIdentity,
+    shareToken: string | null,
+  ): Promise<Identity | null> {
     const header = request.headers.authorization;
     if (!header?.startsWith('Bearer ')) return null;
 
     try {
       const claims = await this.jwt.verifyAsync<AccessTokenClaims>(header.slice('Bearer '.length), {
         secret: this.config.jwt.accessSecret,
+        // Pin the algorithm rather than trusting the token's own header to name it.
+        algorithms: ['HS256'],
       });
-      return { kind: 'user', userId: claims.sub, email: claims.email };
+      return { kind: 'user', userId: claims.sub, email: claims.email, shareToken };
     } catch {
       // An expired or forged token is simply not an identity. Whether that is fatal depends on the
       // endpoint, which is decided above.

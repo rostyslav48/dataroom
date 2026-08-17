@@ -7,7 +7,17 @@ import type { Request } from 'express';
  * up hidden inside login code.
  */
 export type Identity =
-  | { kind: 'user'; userId: string; email: string }
+  | {
+      kind: 'user';
+      userId: string;
+      email: string;
+      /**
+       * A signed-in visitor can arrive on a public link too — that is the normal case, not an
+       * exotic one, since most people are signed into something. Dropping the header for
+       * authenticated callers would deny them a link that works fine in a private window.
+       */
+      shareToken: string | null;
+    }
   | { kind: 'anonymous'; shareToken: string | null };
 
 export interface RequestWithIdentity extends Request {

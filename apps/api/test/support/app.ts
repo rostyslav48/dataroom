@@ -1,4 +1,4 @@
-import { CanActivate, ExecutionContext, INestApplication } from '@nestjs/common';
+import { CanActivate, ExecutionContext, INestApplication, Injectable } from '@nestjs/common';
 import { JwtService } from '@nestjs/jwt';
 import { Test } from '@nestjs/testing';
 import type { Request } from 'express';
@@ -33,13 +33,31 @@ export interface TestHarness {
 
 const googleProfile: { current: GoogleIdentity | null } = { current: null };
 
+/**
+ * Google will not authenticate a test runner, so the code-for-profile exchange is substituted —
+ * and nothing else. The real guard's `returnTo` validation and its `state`/nonce verification both
+ * run unmodified, so the open-redirect and login-CSRF defences are genuinely under test rather than
+ * stubbed past.
+ */
+@Injectable()
 class TestGoogleAuthGuard implements CanActivate {
-  canActivate(context: ExecutionContext): boolean {
-    // The real guard's validation, unmodified — this is where `returnTo` is rejected.
-    new GoogleAuthGuard().getAuthenticateOptions(context);
+  private readonly real: GoogleAuthGuard;
 
+  constructor(config: AppConfig) {
+    this.real = new GoogleAuthGuard(config);
+  }
+
+  canActivate(context: ExecutionContext): boolean {
     const request = context.switchToHttp().getRequest<Request & { user?: unknown }>();
-    if (googleProfile.current) request.user = googleProfile.current;
+
+    // Mints the nonce cookie on the way out; rejects a bad `returnTo` on either leg.
+    this.real.getAuthenticateOptions(context);
+
+    if (request.path.endsWith('/callback')) {
+      this.real.verifyState(context);
+      if (googleProfile.current) request.user = googleProfile.current;
+    }
+
     return true;
   }
 }

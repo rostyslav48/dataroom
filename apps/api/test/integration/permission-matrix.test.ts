@@ -18,6 +18,10 @@ import { createTestDataSource, resetDatabase } from '../support/database';
  * share state × share type. Every cell asserts an **exact** `Access`, including the failure reason,
  * because the reason is part of the contract — the UI branches on it.
  */
+/** Tokens are 256-bit base64url in production; the schema enforces a minimum length. */
+const ROOM_WIDE_TOKEN = 'ROOMWIDETOKEN000000000000000000000000000000';
+const REVOKED_TOKEN = 'REVOKEDTOKEN0000000000000000000000000000000';
+
 describe('permission matrix', () => {
   let dataSource: DataSource;
   let permissions: PermissionService;
@@ -53,9 +57,32 @@ describe('permission matrix', () => {
 
   // ── identities ───────────────────────────────────────────────────────────────
   const identities = (): Record<string, Identity> => ({
-    owner: { kind: 'user', userId: seeded.ownerId, email: fixtures.users.owner.email },
-    recipient: { kind: 'user', userId: seeded.viewerId, email: fixtures.users.viewer.email },
-    stranger: { kind: 'user', userId: seeded.strangerId, email: fixtures.users.stranger.email },
+    owner: {
+      kind: 'user',
+      userId: seeded.ownerId,
+      email: fixtures.users.owner.email,
+      shareToken: null,
+    },
+    recipient: {
+      kind: 'user',
+      userId: seeded.viewerId,
+      email: fixtures.users.viewer.email,
+      shareToken: null,
+    },
+    stranger: {
+      kind: 'user',
+      userId: seeded.strangerId,
+      email: fixtures.users.stranger.email,
+      shareToken: null,
+    },
+    // A signed-in visitor who followed a public link: the ordinary case, since most people are
+    // signed into something.
+    strangerWithLink: {
+      kind: 'user',
+      userId: seeded.strangerId,
+      email: fixtures.users.stranger.email,
+      shareToken: fixtures.PUBLIC_LINK_TOKEN,
+    },
     anonymousWithToken: { kind: 'anonymous', shareToken: fixtures.PUBLIC_LINK_TOKEN },
     anonymousBadToken: { kind: 'anonymous', shareToken: 'not-a-real-token' },
     anonymousNoToken: { kind: 'anonymous', shareToken: null },
@@ -78,29 +105,31 @@ describe('permission matrix', () => {
     },
   };
 
-  const granted = (role: 'owner' | 'viewer', shareRootId: string): Partial<Access> => ({
-    granted: true,
-    role,
-    shareRootId,
-  });
+  const granted = (role: 'owner' | 'viewer', shareRootId: string, shareId: string | null = null) =>
+    ({ granted: true, role, shareRootId, shareId }) satisfies Access;
 
-  const expectAccess = async (identity: Identity, nodeId: string, expected: Partial<Access>) => {
+  /**
+   * `toEqual`, not `toMatchObject`: SPEC-05 requires every cell to assert an *exact* `Access`. A
+   * subset match would let an extra field — a leaked email hint, a stale shareId — ride along
+   * unnoticed, which is the class of bug this matrix exists to catch.
+   */
+  const expectAccess = async (identity: Identity, nodeId: string, expected: Access) => {
     const access = await permissions.resolve(identity, nodeId);
-    expect(access).toMatchObject(expected);
+    expect(access).toEqual(expected);
   };
 
   describe('public link on Financials', () => {
     describe('live', () => {
       it('grants the anonymous holder the share root and every descendant', async () => {
         const anon = identities().anonymousWithToken as Identity;
-        await expectAccess(anon, seeded.financialsId, granted('viewer', seeded.financialsId));
-        await expectAccess(anon, seeded.q3Id, granted('viewer', seeded.financialsId));
-        await expectAccess(anon, seeded.balanceId, granted('viewer', seeded.financialsId));
+        await expectAccess(anon, seeded.financialsId, granted('viewer', seeded.financialsId, seeded.publicShareId));
+        await expectAccess(anon, seeded.q3Id, granted('viewer', seeded.financialsId, seeded.publicShareId));
+        await expectAccess(anon, seeded.balanceId, granted('viewer', seeded.financialsId, seeded.publicShareId));
       });
 
       it('denies the share root’s parent — ancestor names must not leak', async () => {
         await expectAccess(identities().anonymousWithToken as Identity, seeded.rootNodeId, {
-          granted: false,
+          granted: false as const,
           reason: 'FORBIDDEN',
         });
       });
@@ -113,7 +142,7 @@ describe('permission matrix', () => {
 
       it('denies another data room entirely', async () => {
         await expectAccess(identities().anonymousWithToken as Identity, otherRoomNodeId, {
-          granted: false,
+          granted: false as const,
           reason: 'FORBIDDEN',
         });
       });
@@ -128,6 +157,20 @@ describe('permission matrix', () => {
         },
       );
 
+      it('grants a signed-in visitor who followed the link', async () => {
+        // Most people are signed into something, so this is the ordinary way a public link is
+        // opened — not an exotic case. Dropping the token for authenticated callers would deny them
+        // a link that works fine in a private window.
+        const signedIn = identities().strangerWithLink as Identity;
+        await expectAccess(
+          signedIn,
+          seeded.q3Id,
+          granted('viewer', seeded.financialsId, seeded.publicShareId),
+        );
+        // …and it grants exactly what the link grants, nothing wider.
+        await expectAccess(signedIn, seeded.overviewId, { granted: false, reason: 'FORBIDDEN' });
+      });
+
       it('grants the owner everything regardless of the share', async () => {
         const owner = identities().owner as Identity;
         for (const nodeId of [
@@ -139,13 +182,13 @@ describe('permission matrix', () => {
           seeded.balanceId,
           seeded.overviewId,
         ]) {
-          await expectAccess(owner, nodeId, granted('owner', seeded.rootNodeId));
+          await expectAccess(owner, nodeId, granted('owner', seeded.rootNodeId, null));
         }
       });
 
       it('denies the owner in someone else’s room', async () => {
         await expectAccess(identities().owner as Identity, otherRoomNodeId, {
-          granted: false,
+          granted: false as const,
           reason: 'FORBIDDEN',
         });
       });
@@ -159,7 +202,7 @@ describe('permission matrix', () => {
       it('tells the holder their access was revoked, not merely forbidden', async () => {
         const anon = identities().anonymousWithToken as Identity;
         await expectAccess(anon, seeded.financialsId, {
-          granted: false,
+          granted: false as const,
           reason: 'ACCESS_REVOKED',
         });
         await expectAccess(anon, seeded.balanceId, { granted: false, reason: 'ACCESS_REVOKED' });
@@ -173,14 +216,14 @@ describe('permission matrix', () => {
         await expectAccess(
           identities().anonymousWithToken as Identity,
           seeded.q3Id,
-          granted('viewer', seeded.financialsId),
+          granted('viewer', seeded.financialsId, seeded.publicShareId),
         );
 
         await dataSource.query(`UPDATE shares SET revoked_at = now() WHERE id = $1`, [
           seeded.publicShareId,
         ]);
         await expectAccess(identities().anonymousWithToken as Identity, seeded.q3Id, {
-          granted: false,
+          granted: false as const,
           reason: 'ACCESS_REVOKED',
         });
       });
@@ -189,7 +232,7 @@ describe('permission matrix', () => {
         await expectAccess(
           identities().owner as Identity,
           seeded.financialsId,
-          granted('owner', seeded.rootNodeId),
+          granted('owner', seeded.rootNodeId, null),
         );
       });
     });
@@ -226,7 +269,7 @@ describe('permission matrix', () => {
 
       it.each(['owner', 'anonymousWithToken'] as const)('is ITEM_GONE for %s', async (key) => {
         await expectAccess(identities()[key] as Identity, seeded.q3Id, {
-          granted: false,
+          granted: false as const,
           reason: 'ITEM_GONE',
         });
       });
@@ -237,8 +280,8 @@ describe('permission matrix', () => {
     describe('live', () => {
       it('grants the recipient the share root and its descendants', async () => {
         const recipient = identities().recipient as Identity;
-        await expectAccess(recipient, seeded.legalId, granted('viewer', seeded.legalId));
-        await expectAccess(recipient, seeded.ndaId, granted('viewer', seeded.legalId));
+        await expectAccess(recipient, seeded.legalId, granted('viewer', seeded.legalId, seeded.permissionedShareId));
+        await expectAccess(recipient, seeded.ndaId, granted('viewer', seeded.legalId, seeded.permissionedShareId));
       });
 
       it('denies the recipient the parent, a sibling subtree, and a loose file', async () => {
@@ -255,30 +298,28 @@ describe('permission matrix', () => {
         await expectAccess(
           identities().recipient as Identity,
           seeded.legalId,
-          granted('viewer', seeded.legalId),
+          granted('viewer', seeded.legalId, seeded.permissionedShareId),
         );
       });
 
-      it('tells a signed-in stranger it is the wrong account, with a masked hint', async () => {
-        const access = await permissions.resolve(
-          identities().stranger as Identity,
-          seeded.legalId,
-        );
-        expect(access).toMatchObject({ granted: false, reason: 'WRONG_ACCOUNT' });
-        // Enough to recognise your own other account; not enough to harvest an address.
-        expect((access as { invitedEmailHint?: string }).invitedEmailHint).toBe('v•••@example.com');
+      it('tells a signed-in stranger it is the wrong account, and nothing more', async () => {
+        const access = await permissions.resolve(identities().stranger as Identity, seeded.legalId);
+        // The reason is disclosed so the UI can offer "switch account"; the invited address is not,
+        // even masked — reaching here needs only a node id and any session, so returning it would
+        // turn a forwarded link into an address-harvesting oracle.
+        expect(access).toEqual({ granted: false, reason: 'WRONG_ACCOUNT' });
       });
 
       it('does not accept a link token for a permissioned share', async () => {
         await expectAccess(identities().anonymousWithToken as Identity, seeded.legalId, {
-          granted: false,
+          granted: false as const,
           reason: 'FORBIDDEN',
         });
       });
 
       it('denies an anonymous caller outright', async () => {
         await expectAccess(identities().anonymousNoToken as Identity, seeded.ndaId, {
-          granted: false,
+          granted: false as const,
           reason: 'FORBIDDEN',
         });
       });
@@ -288,7 +329,7 @@ describe('permission matrix', () => {
       it('reports ACCESS_REVOKED when the share is revoked', async () => {
         await states.revoked!(seeded.permissionedShareId, seeded.legalId);
         await expectAccess(identities().recipient as Identity, seeded.ndaId, {
-          granted: false,
+          granted: false as const,
           reason: 'ACCESS_REVOKED',
         });
       });
@@ -299,7 +340,7 @@ describe('permission matrix', () => {
           [seeded.permissionedShareId],
         );
         await expectAccess(identities().recipient as Identity, seeded.legalId, {
-          granted: false,
+          granted: false as const,
           reason: 'ACCESS_REVOKED',
         });
       });
@@ -309,7 +350,7 @@ describe('permission matrix', () => {
       it('reports SHARE_EXPIRED', async () => {
         await states.expired!(seeded.permissionedShareId, seeded.legalId);
         await expectAccess(identities().recipient as Identity, seeded.ndaId, {
-          granted: false,
+          granted: false as const,
           reason: 'SHARE_EXPIRED',
         });
       });
@@ -319,7 +360,7 @@ describe('permission matrix', () => {
       it('reports ITEM_GONE for a surviving descendant', async () => {
         await states.shareRootDeleted!(seeded.permissionedShareId, seeded.legalId);
         await expectAccess(identities().recipient as Identity, seeded.ndaId, {
-          granted: false,
+          granted: false as const,
           reason: 'ITEM_GONE',
         });
       });
@@ -334,18 +375,26 @@ describe('permission matrix', () => {
       await dataSource.query(
         `INSERT INTO shares (id, node_id, data_room_id, type, role, token, created_by)
          VALUES ($1, $2, $3, 'public_link', 'viewer', $4, $5)`,
-        [roomWideId, seeded.rootNodeId, seeded.roomId, 'ROOMWIDETOKEN', seeded.ownerId],
+        [roomWideId, seeded.rootNodeId, seeded.roomId, ROOM_WIDE_TOKEN, seeded.ownerId],
       );
 
-      const roomWide: Identity = { kind: 'anonymous', shareToken: 'ROOMWIDETOKEN' };
-      await expectAccess(roomWide, seeded.overviewId, granted('viewer', seeded.rootNodeId));
-      await expectAccess(roomWide, seeded.balanceId, granted('viewer', seeded.rootNodeId));
+      const roomWide: Identity = { kind: 'anonymous', shareToken: ROOM_WIDE_TOKEN };
+      await expectAccess(
+        roomWide,
+        seeded.overviewId,
+        granted('viewer', seeded.rootNodeId, roomWideId),
+      );
+      await expectAccess(
+        roomWide,
+        seeded.balanceId,
+        granted('viewer', seeded.rootNodeId, roomWideId),
+      );
 
       // The narrower link still resolves to its own root, so breadcrumbs stay truncated there.
       await expectAccess(
         identities().anonymousWithToken as Identity,
         seeded.balanceId,
-        granted('viewer', seeded.financialsId),
+        granted('viewer', seeded.financialsId, seeded.publicShareId),
       );
     });
 
@@ -354,15 +403,15 @@ describe('permission matrix', () => {
       await dataSource.query(
         `INSERT INTO shares (id, node_id, data_room_id, type, role, token, created_by, revoked_at)
          VALUES ($1, $2, $3, 'public_link', 'viewer', $4, $5, now())`,
-        [secondId, seeded.financialsId, seeded.roomId, 'REVOKEDTOKEN', seeded.ownerId],
+        [secondId, seeded.financialsId, seeded.roomId, REVOKED_TOKEN, seeded.ownerId],
       );
 
       await expectAccess(
         identities().anonymousWithToken as Identity,
         seeded.q3Id,
-        granted('viewer', seeded.financialsId),
+        granted('viewer', seeded.financialsId, seeded.publicShareId),
       );
-      await expectAccess({ kind: 'anonymous', shareToken: 'REVOKEDTOKEN' }, seeded.q3Id, {
+      await expectAccess({ kind: 'anonymous', shareToken: REVOKED_TOKEN }, seeded.q3Id, {
         granted: false,
         reason: 'ACCESS_REVOKED',
       });
@@ -386,7 +435,7 @@ describe('permission matrix', () => {
       await expectAccess(
         identities().anonymousWithToken as Identity,
         seeded.q3Id,
-        granted('viewer', seeded.financialsId),
+        granted('viewer', seeded.financialsId, seeded.publicShareId),
       );
     });
 

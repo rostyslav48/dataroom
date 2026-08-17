@@ -19,6 +19,13 @@ export interface IssuedSession {
 /** Stored hashed: a leaked database row is then a useless string rather than a live session. */
 const hash = (token: string): string => createHash('sha256').update(token).digest('hex');
 
+/**
+ * How long after a successful exchange a second presentation of the same token is still treated as
+ * a race rather than a replay. Long enough for two tabs refreshing together, far too short to be
+ * useful to an attacker who has to first obtain the cookie.
+ */
+const REPLAY_GRACE_MS = 15_000;
+
 @Injectable()
 export class TokensService {
   constructor(
@@ -33,7 +40,7 @@ export class TokensService {
 
     const accessToken = await this.jwt.signAsync(
       { sub: user.id, email: user.email },
-      { secret: accessSecret, expiresIn: accessTtl },
+      { secret: accessSecret, expiresIn: accessTtl, algorithm: 'HS256' },
     );
 
     const refreshToken = randomBytes(48).toString('base64url');
@@ -84,7 +91,19 @@ export class TokensService {
     const row = claimed[0];
     if (!row) {
       const existing = await this.refreshTokens.findOne({ where: { tokenHash } });
+
       if (existing?.usedAt) {
+        const age = Date.now() - existing.usedAt.getTime();
+        if (age <= REPLAY_GRACE_MS && existing.revokedAt === null) {
+          // Two tabs whose access tokens expired together both refresh; one wins the row lock and
+          // the other arrives moments later with the same cookie. That is not an attack, and
+          // treating it as one logs the user out of both tabs. Only an *older* replay is a signal.
+          const user = await this.refreshTokens.manager.findOne(UserEntity, {
+            where: { id: existing.userId },
+          });
+          if (user) return this.issue(user, existing.familyId);
+        }
+
         await this.revokeFamily(existing.familyId);
         throw errors.unauthenticated('That session was ended for safety. Sign in again.');
       }

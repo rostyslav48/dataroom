@@ -1,4 +1,4 @@
-import { DomainError, errors } from '../common/domain-error';
+import { type DomainError, errors } from '../common/domain-error';
 
 /**
  * The answer to the only authorization question this application asks: *may this identity read
@@ -32,28 +32,11 @@ export interface AccessGranted {
 export interface AccessDenied {
   granted: false;
   reason: DeniedReason;
-  /**
-   * For `WRONG_ACCOUNT` only, and masked (`v•••@example.com`): enough for someone to recognise
-   * which of their own accounts was invited, not enough to harvest a third party's address from a
-   * node id.
-   */
-  invitedEmailHint?: string;
 }
 
 export type Access = AccessGranted | AccessDenied;
 
-export const denied = (reason: DeniedReason, invitedEmailHint?: string): AccessDenied => ({
-  granted: false,
-  reason,
-  ...(invitedEmailHint === undefined ? {} : { invitedEmailHint }),
-});
-
-/** `viewer@example.com` → `v•••@example.com`. */
-export function maskEmail(email: string): string {
-  const [local = '', domain = ''] = email.split('@');
-  const head = local.slice(0, 1);
-  return `${head}•••@${domain}`;
-}
+export const denied = (reason: DeniedReason): AccessDenied => ({ granted: false, reason });
 
 /** The single mapping from a denial to the error the client sees. */
 export function accessError(access: AccessDenied): DomainError {
@@ -67,10 +50,13 @@ export function accessError(access: AccessDenied): DomainError {
     case 'SHARE_EXPIRED':
       return errors.shareExpired();
     case 'WRONG_ACCOUNT':
-      return new DomainError(
-        'WRONG_ACCOUNT',
-        'This was shared with a different account.',
-        access.invitedEmailHint ? { invitedEmail: [access.invitedEmailHint] } : undefined,
+      // The reason is disclosed; the invited address is not, even masked. Reaching this branch
+      // requires only a node id and *any* session, so telling the caller which address holds the
+      // invitation would turn a forwarded link into an address-harvesting oracle — and the domain
+      // half ("someone at acquirer-corp.com is in this deal room") is the sensitive half.
+      // The UI's switch-account screen needs the reason, not the address.
+      return errors.wrongAccount(
+        'This was shared with a different account. Try switching accounts.',
       );
     case 'FORBIDDEN':
       return errors.forbidden();

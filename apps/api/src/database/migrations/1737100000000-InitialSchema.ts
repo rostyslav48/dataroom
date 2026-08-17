@@ -149,7 +149,13 @@ export class InitialSchema1737100000000 implements MigrationInterface {
         revoked_at   timestamptz,
         created_by   uuid NOT NULL REFERENCES users(id),
         created_at   timestamptz NOT NULL DEFAULT now(),
-        CONSTRAINT ck_token_iff_link CHECK ((type = 'public_link') = (token IS NOT NULL))
+        -- A public link must carry a token, a permissioned share must not, and a token that exists
+        -- must be long enough to be unguessable. Without the length clause an empty-string token
+        -- would satisfy the constraint and then match an empty presented token.
+        CONSTRAINT ck_token_iff_link CHECK (
+          (type = 'public_link') = (token IS NOT NULL)
+          AND (token IS NULL OR length(token) >= 32)
+        )
       )
     `);
     await queryRunner.query(

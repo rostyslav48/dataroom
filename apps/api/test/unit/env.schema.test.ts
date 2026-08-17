@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { AppConfig } from '../../src/config/app.config';
 import { EnvValidationError, durationToMs, validateEnv } from '../../src/config/env.schema';
 
 const valid = {
@@ -81,5 +82,32 @@ describe('durationToMs', () => {
 
   it('throws on an unparseable duration', () => {
     expect(() => durationToMs('soon')).toThrow();
+  });
+});
+
+describe('production cookie configuration', () => {
+  it('is cross-site and Secure when configured for the deployed pair of domains', () => {
+    // The deployed web app and API sit on unrelated registrable domains, so the refresh cookie has
+    // to be SameSite=None; Secure. The integration tests run against the local Lax configuration,
+    // so without this case the production cookie shape would be asserted nowhere.
+    const config = new AppConfig(
+      validateEnv({
+        ...valid,
+        NODE_ENV: 'production',
+        COOKIE_SAMESITE: 'none',
+        COOKIE_SECURE: 'true',
+        WEB_ORIGIN: 'https://dataroom.vercel.app',
+        GOOGLE_CALLBACK_URL: 'https://dataroom.onrender.com/api/v1/auth/google/callback',
+      }),
+    );
+
+    expect(config.cookie).toMatchObject({
+      name: 'refresh_token',
+      path: '/api/v1/auth',
+      sameSite: 'none',
+      secure: true,
+    });
+    expect(config.cookie.maxAgeMs).toBe(30 * 24 * 60 * 60 * 1000);
+    expect(config.isProduction).toBe(true);
   });
 });
