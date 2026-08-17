@@ -1,7 +1,6 @@
 import { useCallback, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { ResourceName, type NodeListItem, type NodeSortField } from '@dataroom/contracts';
-import { StateBlock } from '@/components/ui/StateBlock';
 import { isApiClientError } from '@/lib/api';
 import { errorMap, presentError } from '@/lib/errorMap';
 import { Breadcrumbs } from './Breadcrumbs';
@@ -20,6 +19,10 @@ import { DropZoneOverlay } from '@/features/uploads/DropZoneOverlay';
 import { useUploadStore } from '@/features/uploads/uploadStore';
 import { downloadNode } from '@/features/viewer/download';
 import { ShareDialog } from '@/features/shares/ShareDialog';
+import { AccessErrorScreen } from '@/features/shares/accessStates';
+import { SharedLayout } from '@/features/shares/SharedLayout';
+import { useSharedByName } from '@/features/shares/useSharedBy';
+import { useShareResolve } from '@/features/shares/useShareResolve';
 
 export interface FolderPageProps {
   nodeId: string;
@@ -51,6 +54,8 @@ export function FolderPage({ nodeId, context }: FolderPageProps): JSX.Element {
   const detail = useNodeDetail(nodeId, shareToken);
   const children = useChildren(nodeId, { sort, dir }, shareToken);
   const rename = useRenameNode(nodeId);
+  const resolvedShare = useShareResolve(shareToken ?? '');
+  const sharedBy = useSharedByName(context, detail.data?.node.dataRoomId ?? '');
 
   const openNode = useCallback(
     (node: NodeListItem) => {
@@ -103,20 +108,20 @@ export function FolderPage({ nodeId, context }: FolderPageProps): JSX.Element {
   }
 
   if (detail.error !== null) {
-    const presentation = presentError(detail.error);
+    // Layout and recovery both come from the server's own answer: each access failure has its own
+    // designed screen, chosen by `code`, never by guessing from the URL.
     return (
-      <StateBlock
-        tone="danger"
-        title={presentation.title}
-        body={presentation.body}
-        action={{
-          label: 'Try again',
-          onClick: () => {
+      <div className="mx-auto max-w-2xl">
+        <AccessErrorScreen
+          error={detail.error}
+          context={context}
+          nodeId={nodeId}
+          shareRootId={resolvedShare.data?.nodeId}
+          onRetry={() => {
             void detail.refetch();
-          },
-        }}
-        className="mx-auto max-w-2xl"
-      />
+          }}
+        />
+      </div>
     );
   }
 
@@ -150,7 +155,7 @@ export function FolderPage({ nodeId, context }: FolderPageProps): JSX.Element {
       }
     : undefined;
 
-  return (
+  const body = (
     <div className="mx-auto max-w-5xl">
       <Breadcrumbs
         crumbs={detail.data.breadcrumbs}
@@ -279,5 +284,18 @@ export function FolderPage({ nodeId, context }: FolderPageProps): JSX.Element {
         </>
       ) : null}
     </div>
+  );
+
+  if (canManage) return body;
+
+  // `access: 'viewer'` renders read-only chrome even on a `/rooms/...` URL — the response decides.
+  return (
+    <SharedLayout
+      ownerName={sharedBy}
+      itemName={detail.data.node.name}
+      standalone={context.kind === 'share'}
+    >
+      {body}
+    </SharedLayout>
   );
 }

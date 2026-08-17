@@ -1,11 +1,14 @@
 import { Suspense, lazy, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { StateBlock } from '@/components/ui/StateBlock';
 import { Skeleton } from '@/components/ui/Skeleton';
 import { presentError } from '@/lib/errorMap';
 import { nodeContentUrl } from '@/lib/apiEndpoints';
 import { folderPath, shareTokenOf, type BrowseContext } from '@/features/browser/browseContext';
 import { useNodeDetail } from '@/features/browser/useNodeQueries';
+import { AccessErrorScreen } from '@/features/shares/accessStates';
+import { SharedLayout } from '@/features/shares/SharedLayout';
+import { useSharedByName } from '@/features/shares/useSharedBy';
+import { useShareResolve } from '@/features/shares/useShareResolve';
 import { ViewerToolbar } from './ViewerToolbar';
 import { UnsupportedPreview } from './UnsupportedPreview';
 import { PdfErrorState } from './PdfErrorState';
@@ -27,6 +30,8 @@ export function FileViewerPage({ nodeId, context }: FileViewerPageProps): JSX.El
   const navigate = useNavigate();
   const shareToken = shareTokenOf(context);
   const detail = useNodeDetail(nodeId, shareToken);
+  const resolvedShare = useShareResolve(shareToken ?? '');
+  const sharedBy = useSharedByName(context, detail.data?.node.dataRoomId ?? '');
 
   const [pageNumber, setPageNumber] = useState(1);
   const [numPages, setNumPages] = useState(0);
@@ -64,20 +69,18 @@ export function FileViewerPage({ nodeId, context }: FileViewerPageProps): JSX.El
   }
 
   if (detail.error !== null) {
-    const presentation = presentError(detail.error);
     return (
-      <StateBlock
-        tone="danger"
-        title={presentation.title}
-        body={presentation.body}
-        action={{
-          label: 'Try again',
-          onClick: () => {
+      <div className="mx-auto max-w-2xl">
+        <AccessErrorScreen
+          error={detail.error}
+          context={context}
+          nodeId={nodeId}
+          shareRootId={resolvedShare.data?.nodeId}
+          onRetry={() => {
             void detail.refetch();
-          },
-        }}
-        className="mx-auto max-w-2xl"
-      />
+          }}
+        />
+      </div>
     );
   }
 
@@ -87,7 +90,7 @@ export function FileViewerPage({ nodeId, context }: FileViewerPageProps): JSX.El
   const contentUrl =
     attempt === 0 ? nodeContentUrl(nodeId) : `${nodeContentUrl(nodeId)}?refresh=${String(attempt)}`;
 
-  return (
+  const body = (
     <div className="mx-auto flex min-h-full max-w-5xl flex-col overflow-hidden rounded-lg border border-line bg-surface">
       <ViewerToolbar
         fileName={node.name}
@@ -165,5 +168,17 @@ export function FileViewerPage({ nodeId, context }: FileViewerPageProps): JSX.El
         </Suspense>
       )}
     </div>
+  );
+
+  if (detail.data.access === 'owner') return body;
+
+  return (
+    <SharedLayout
+      ownerName={sharedBy}
+      itemName={node.name}
+      standalone={context.kind === 'share'}
+    >
+      {body}
+    </SharedLayout>
   );
 }
