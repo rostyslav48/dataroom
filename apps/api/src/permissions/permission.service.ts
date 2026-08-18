@@ -113,7 +113,11 @@ export class PermissionService {
                    OR ($4::citext IS NOT NULL AND rec.user_id IS NULL AND rec.email = $4::citext)
                  ))
           )
-        ORDER BY s.role DESC
+        -- Equal-role grants are ordered shallowest-first: that is the widest grant the caller
+        -- actually holds, and therefore the most permissive one. Without this tie-breaker a
+        -- room-root and nested-folder share were selected by database accident, making both
+        -- access scope and breadcrumb truncation nondeterministic.
+        ORDER BY s.role DESC, sn.depth ASC, s.id
         LIMIT 1`,
       [candidateIds, token, userId, email],
     );

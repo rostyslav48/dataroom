@@ -11,6 +11,7 @@ import { DatabaseModule } from './database/database.module';
 import { HealthController } from './health/health.controller';
 import { NodesModule } from './nodes/nodes.module';
 import { PermissionsModule } from './permissions/permissions.module';
+import { SharesModule } from './shares/shares.module';
 import { StorageModule } from './storage/storage.module';
 import { UploadsModule } from './uploads/uploads.module';
 import { UsersModule } from './users/users.module';
@@ -59,6 +60,7 @@ export const SHARE_THROTTLER = 'share';
     DataRoomsModule,
     NodesModule,
     UploadsModule,
+    SharesModule,
   ],
   controllers: [HealthController],
 })
