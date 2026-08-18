@@ -66,17 +66,22 @@ pnpm --filter @dataroom/contracts build   # required before typechecking the app
 
 pnpm db:up                                 # Postgres 15 in Docker
 pnpm db:migrate                            # TypeORM CLI, explicit migration list
+pnpm db:seed                               # the canonical fixture tree; idempotent
 pnpm dev:api                               # localhost:3000, /api/v1/health
 VITE_USE_MSW=true pnpm dev:web             # localhost:5173, no backend needed
 
-pnpm --filter @dataroom/api test           # 262 tests, real Postgres via testcontainers
-pnpm --filter @dataroom/web test           # 336 component tests
+pnpm test                                  # what CI runs: contracts + api + web, gates enforced
+pnpm test:fast                             # the inner loop — no coverage, no gates
 pnpm lint && pnpm typecheck
 ```
 
-> **`pnpm test` is not what CI runs.** CI runs `test:coverage`, which additionally enforces the
-> gates (90% on `*.service.ts` and `permissions/**`, 80% elsewhere). The API gate is **currently
-> red**. Run `test:coverage` before claiming a change is green, or you will discover it in CI.
+> **`pnpm test` is the gate.** It is defined as literally the three commands CI runs, in order —
+> contracts, then `@dataroom/api test:coverage`, then `@dataroom/web test:coverage` — so a green
+> local run and a green CI run mean the same thing. That was not true until CI-1: root `test` ran
+> the ungated suites while CI ran the gated ones, and the 90% service threshold quietly stopped
+> being a threshold. `test:fast` exists for the inner loop and is named so it cannot be mistaken
+> for the gate. Gates: 90% statements on `*.service.ts` and on `permissions/**`, 80% everywhere
+> else. Currently ~692 tests, all green.
 
 ## Non-negotiables
 
@@ -88,7 +93,10 @@ pnpm lint && pnpm typecheck
    attempt the write and map `23505`. A check-then-insert is a TOCTOU race under concurrent uploads.
 4. **Every response is Zod-parsed on both sides.** The backend's contract tests parse with
    `.strict()`; the frontend parses every response it receives. A shape that drifts fails loudly.
-5. **Bytes never pass through the API.** Uploads `PUT` straight to a signed URL; reads 302 to one.
+5. **Bytes never pass through the API.** Uploads `PUT` straight to a signed URL; reads 302 to one,
+   and the URL is minted **only after** the guard has granted — a 403 returned after minting still
+   handed out a working link for sixty seconds. Denial tests assert on the mint record, not on the
+   status code.
 6. **No `eslint-disable`, `@ts-ignore`, `@ts-nocheck`, `TODO`, or `FIXME`.** CI greps for all of
    them. If a lint rule is wrong, change the rule and say why.
 7. **Ask rather than assume when a spec is ambiguous.** A wrong assumption baked into one track
