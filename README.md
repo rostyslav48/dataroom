@@ -102,8 +102,29 @@ pnpm install --frozen-lockfile
 pnpm --filter @dataroom/contracts build
 ```
 
-If `corepack enable` is unavailable in a locked-down shell, prefix commands with `corepack`, for
-example `corepack pnpm install --frozen-lockfile`.
+**If `corepack enable` cannot write to the Node bin directory** — a locked-down shell, or a
+system-managed Node — put a Corepack shim in a directory you own and keep it on `PATH` for
+everything that follows:
+
+```bash
+pnpm_shim=$(mktemp -d)
+corepack enable --install-directory "$pnpm_shim"
+export PATH="$pnpm_shim:$PATH"
+
+pnpm install --frozen-lockfile
+pnpm --filter @dataroom/contracts build
+```
+
+Prefixing individual commands with `corepack` is **not** enough. `corepack pnpm install` works, but
+`corepack pnpm test` fails with `sh: 1: pnpm: not found`, because the root scripts are themselves
+written in terms of `pnpm`:
+
+```
+> pnpm --filter @dataroom/contracts test && pnpm --filter @dataroom/api test:coverage && …
+```
+
+The nested call is looked up on `PATH` like any other command, and `corepack` only ever satisfied
+the outer one. Every root script — `test`, `lint`, `typecheck`, `build`, `db:*` — has this shape.
 
 ### Option A: run the frontend with MSW, no accounts or backend
 
@@ -111,12 +132,29 @@ This is the fastest way to inspect the complete UI and its mutable fixture tree:
 
 ```bash
 pnpm --filter @dataroom/web exec msw init public/ --no-save
-VITE_USE_MSW=true pnpm dev:web
+VITE_USE_MSW=true pnpm dev:web --host 127.0.0.1 --strictPort
 ```
 
 Open `http://127.0.0.1:5173`. The generated service-worker file is intentionally untracked and must
 be created once per clean clone. MSW is development-only and the production build is checked to make
 sure it contains neither the worker nor the mock handlers.
+
+Two details in that command, both of which have already cost someone an afternoon:
+
+- **`--host 127.0.0.1` is not optional.** Left to itself Vite prints `http://localhost:5173/` and
+  listens on `[::1]` only, so the IPv4 address above refuses the connection while the server insists
+  it is running. `--strictPort` then makes a port clash fail loudly instead of silently moving to
+  5174 and leaving you refreshing the wrong tab.
+- **Do not write `pnpm dev:web -- --host 127.0.0.1`.** The `--` separator is passed through to Vite,
+  which stops parsing options at it and ignores every flag that follows — the server starts, the
+  flags are dropped, and the failure looks exactly like the one above.
+
+These instructions were last re-run end to end on 2026-08-19, from a `git clone --no-hardlinks` of
+this repository into an empty directory, in a shell with no `pnpm` on `PATH`: Corepack shim, frozen
+install, contracts build, `msw init`, Vite bound to `127.0.0.1`, then `curl` against both
+`http://127.0.0.1:5173` and `http://127.0.0.1:5173/mockServiceWorker.js`, and finally a headless
+browser confirming the fixture room renders. Following instructions is the only way to know they
+work; believing them is not.
 
 ### Option B: run the real local stack
 
@@ -128,8 +166,10 @@ cp .env.example .env
 
 Replace every empty or placeholder value in `.env`:
 
-- Create a Google OAuth consent screen using `openid`, `email`, and `profile`, then register
-  `http://localhost:3000/api/v1/auth/google/callback`.
+- Create a Google OAuth consent screen using `openid`, `email`, and `profile`, then register the
+  callback **exactly** as `GOOGLE_CALLBACK_URL` spells it —
+  `http://127.0.0.1:3000/api/v1/auth/google/callback`. Google treats `localhost` and `127.0.0.1` as
+  different redirect URIs; register both if you intend to use both.
 - Create a **private** Supabase Storage bucket matching `SUPABASE_BUCKET`. Put the Supabase URL and
   service-role key only in the API environment; never expose the key through a `VITE_` variable.
 - Generate distinct access and refresh secrets, for example with `openssl rand -base64 48` twice.
@@ -152,8 +192,15 @@ pnpm dev:api
 ```
 
 ```bash
-VITE_API_URL=http://localhost:3000 VITE_USE_MSW=false pnpm dev:web
+VITE_API_URL=http://127.0.0.1:3000 VITE_USE_MSW=false pnpm dev:web --host 127.0.0.1 --strictPort
 ```
+
+**Use one host everywhere — `127.0.0.1` here, since that is what the URLs below say.** CORS is an
+exact-origin match with credentials, so an API started with `WEB_ORIGIN=http://localhost:5173` while
+the browser is on `http://127.0.0.1:5173` rejects every request the app makes. What you see then is
+not an error page: the app renders its signed-out landing screen, exactly as if the session had
+expired. `.env.example` ships `127.0.0.1` for that reason, and the refresh cookie is host-only, so
+mixing the two hosts breaks the session for the same reason twice.
 
 Useful checks:
 
@@ -191,12 +238,21 @@ they do not use the developer database. The Playwright suite expects a separatel
 the canonical seed:
 
 ```bash
-E2E_WEB_URL=http://localhost:5173 \
-E2E_API_URL=http://localhost:3000 \
+E2E_WEB_URL=http://127.0.0.1:5173 \
+E2E_API_URL=http://127.0.0.1:3000 \
 DATABASE_URL=postgres://dataroom:dataroom@localhost:5432/dataroom \
 JWT_ACCESS_SECRET='<the value from .env>' \
 pnpm test:e2e
 ```
+
+The stack it points at must have been started with `WEB_ORIGIN` equal to `E2E_WEB_URL`, for the CORS
+reason above; the browser-driven flows fail on the signed-out landing page otherwise.
+
+29 tests. Against a local stack, **25 pass and 4 skip**. The four are the flows that move bytes:
+`POST /uploads/init` mints a signed upload URL before it answers, so without a real Supabase bucket
+they fail on a 500 that says nothing about the behaviour under test. They are gated rather than left
+red — set `E2E_STORAGE_READY=true` once a bucket with CORS exists, and they run. Nothing else in the
+suite is skipped or conditional.
 
 Playwright injects sessions from its own harness rather than adding a production login backdoor.
 The actual Google round trip is intentionally a manual deployment check.
