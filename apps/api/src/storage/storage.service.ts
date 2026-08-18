@@ -46,3 +46,16 @@ export const WRITE_URL_TTL_SECONDS = 3600;
 
 export const storageKeyFor = (dataRoomId: string, nodeId: string, versionId: string): string =>
   `${dataRoomId}/${nodeId}/${versionId}`;
+
+/**
+ * Strips anything that could break out of a `Content-Disposition` filename.
+ *
+ * It lives beside the interface rather than inside one implementation because a node name is user
+ * input — `ResourceName` forbids only `/` and `\`, so a quote or a CRLF is a perfectly legal name —
+ * and the header it ends up in is written by whichever object store is behind the interface. A
+ * sanitiser that only the Supabase implementation applied would be a guarantee that disappeared the
+ * day the storage backend changed.
+ */
+export function sanitizeFilename(filename: string): string {
+  return filename.replace(/[\r\n"\\]/g, '').slice(0, 200) || 'download';
+}

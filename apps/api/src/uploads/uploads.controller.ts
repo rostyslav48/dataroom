@@ -1,4 +1,15 @@
-import { Body, Controller, HttpCode, HttpStatus, Param, Post, UseGuards } from '@nestjs/common';
+import {
+  Body,
+  Controller,
+  Get,
+  Header,
+  HttpCode,
+  HttpStatus,
+  Param,
+  Post,
+  Redirect,
+  UseGuards,
+} from '@nestjs/common';
 import {
   endpoints,
   type CompleteUploadResponse,
@@ -6,12 +17,19 @@ import {
   type RetryUploadResponse,
 } from '@dataroom/contracts';
 import { CurrentIdentity, isUser, type Identity } from '../auth/identity';
+import { AllowsShareToken } from '../auth/public.decorator';
 import { errors } from '../common/domain-error';
 import { validate } from '../common/zod-validation.pipe';
-import { OwnerGuard } from '../permissions/access.guard';
+import { OwnerGuard, ReadAccessGuard } from '../permissions/access.guard';
 import { Resource } from '../permissions/resource.decorator';
 import { InitUploadRequest } from './upload-request.schema';
 import { UploadsService } from './uploads.service';
+
+/** What Nest's `@Redirect()` expects back from a handler. */
+interface Redirection {
+  url: string;
+  statusCode: number;
+}
 
 /**
  * The upload lifecycle's HTTP surface. Bytes never touch it — every route here moves metadata and
@@ -60,5 +78,37 @@ export class UploadsController {
   @UseGuards(OwnerGuard)
   abort(@Param('versionId') versionId: string): Promise<void> {
     return this.uploads.abort(versionId);
+  }
+
+  /**
+   * Reading bytes back out. Both routes are declared in the *nodes* contract because that is what
+   * the caller names, and implemented here because the version and its storage key are this
+   * module's business.
+   *
+   * `ReadAccessGuard` runs to completion before the handler body starts, which is the entire
+   * security property: a signed URL is minted only after access has been granted, so a denied
+   * caller never causes one to exist. A 403 returned *after* minting would still have handed out a
+   * URL that works for the next sixty seconds.
+   */
+  @Get(endpoints.nodes.content.path)
+  @AllowsShareToken()
+  @Resource('node')
+  @UseGuards(ReadAccessGuard)
+  @Header('Cache-Control', 'no-store')
+  @Redirect()
+  async content(@Param('id') id: string): Promise<Redirection> {
+    const { url } = await this.uploads.signedUrlFor(id, 'inline');
+    return { url, statusCode: HttpStatus.FOUND };
+  }
+
+  @Get(endpoints.nodes.download.path)
+  @AllowsShareToken()
+  @Resource('node')
+  @UseGuards(ReadAccessGuard)
+  @Header('Cache-Control', 'no-store')
+  @Redirect()
+  async download(@Param('id') id: string): Promise<Redirection> {
+    const { url } = await this.uploads.signedUrlFor(id, 'attachment');
+    return { url, statusCode: HttpStatus.FOUND };
   }
 }

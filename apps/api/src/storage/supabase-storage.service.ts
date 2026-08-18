@@ -2,11 +2,12 @@ import { Injectable, Logger } from '@nestjs/common';
 import { createClient, type SupabaseClient } from '@supabase/supabase-js';
 import { errors } from '../common/domain-error';
 import { AppConfig } from '../config/app.config';
-import type {
-  DownloadOptions,
-  SignedUrl,
-  StorageService,
-  StoredObject,
+import {
+  sanitizeFilename,
+  type DownloadOptions,
+  type SignedUrl,
+  type StorageService,
+  type StoredObject,
 } from './storage.service';
 
 /**
@@ -55,8 +56,9 @@ export class SupabaseStorageService implements StorageService {
         key,
         ttlSeconds,
         // Supabase turns `download` into the Content-Disposition filename and encodes it itself.
-        // The name is sanitised anyway: a filename is user input, and it must not be able to inject
-        // a header.
+        // Sanitised again here, even though callers already sanitise: this is the last line before
+        // a user-controlled string becomes a header, and it is idempotent, so the cost of keeping
+        // it is nothing and the cost of a caller that forgets is a header injection.
         options.disposition === 'attachment' ? { download: sanitizeFilename(options.filename) } : {},
       );
 
@@ -100,9 +102,4 @@ export class SupabaseStorageService implements StorageService {
     // fail the user's request.
     if (error) this.logger.warn({ key, err: error }, 'failed to delete an object');
   }
-}
-
-/** Strips anything that could break out of a `Content-Disposition` filename. */
-export function sanitizeFilename(filename: string): string {
-  return filename.replace(/[\r\n"\\]/g, '').slice(0, 200) || 'download';
 }

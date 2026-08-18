@@ -19,6 +19,7 @@ import {
   READ_URL_TTL_SECONDS,
   STORAGE_SERVICE,
   WRITE_URL_TTL_SECONDS,
+  sanitizeFilename,
   storageKeyFor,
   type SignedUrl,
   type StorageService,
@@ -308,7 +309,10 @@ export class UploadsService {
 
     return this.storage.createSignedDownloadUrl(version.storageKey, READ_URL_TTL_SECONDS, {
       disposition,
-      filename: node.name,
+      // The node's name is user input and ends up in a `Content-Disposition` header written by
+      // whichever object store is behind the interface, so it is sanitised here — before it leaves
+      // the service — rather than in one implementation of it.
+      filename: sanitizeFilename(node.name),
     });
   }
 

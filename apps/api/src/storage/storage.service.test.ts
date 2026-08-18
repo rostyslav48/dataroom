@@ -1,7 +1,11 @@
 import { describe, expect, it } from 'vitest';
 import { fixtures } from '@dataroom/contracts';
-import { storageKeyFor, READ_URL_TTL_SECONDS, WRITE_URL_TTL_SECONDS } from './storage.service';
-import { sanitizeFilename } from './supabase-storage.service';
+import {
+  READ_URL_TTL_SECONDS,
+  WRITE_URL_TTL_SECONDS,
+  sanitizeFilename,
+  storageKeyFor,
+} from './storage.service';
 
 describe('storage keys', () => {
   it('are built from uuids only, so no filename ever reaches storage', () => {
