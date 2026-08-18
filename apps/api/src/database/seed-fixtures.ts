@@ -1,4 +1,4 @@
-import { randomUUID } from 'node:crypto';
+import { createHash } from 'node:crypto';
 import type { DataSource, EntityManager } from 'typeorm';
 import { fixtures } from '@dataroom/contracts';
 import { buildPath, rootPath } from '../nodes/path.util';
@@ -37,6 +37,25 @@ export interface SeededFixtures {
 }
 
 const { IDS, nodes, users, dataRoom, PUBLIC_LINK_TOKEN } = fixtures;
+
+/**
+ * A version id derived from its node's, rather than a random one.
+ *
+ * The fixture node ids are constants; the version ids were not, so re-seeding produced new storage
+ * keys (`room/node/version`) every time and orphaned whatever had been uploaded under the old ones.
+ * Hashing keeps `pnpm db:seed` genuinely repeatable — same tree, same keys — and the fixtures live
+ * in `@dataroom/contracts`, which is frozen, so the ids cannot simply be added there.
+ */
+function versionIdFor(nodeId: string): string {
+  const hash = createHash('sha256').update(`file-version:${nodeId}`).digest('hex');
+  return [
+    hash.slice(0, 8),
+    hash.slice(8, 12),
+    `4${hash.slice(13, 16)}`,
+    `8${hash.slice(17, 20)}`,
+    hash.slice(20, 32),
+  ].join('-');
+}
 
 async function insertUser(
   manager: EntityManager,
@@ -113,7 +132,7 @@ async function insertFile(
     ],
   );
 
-  const versionId = randomUUID();
+  const versionId = versionIdFor(params.id);
   await manager.query(
     `INSERT INTO file_versions
        (id, node_id, version, storage_key, size_bytes, mime_type, status, uploaded_by)
