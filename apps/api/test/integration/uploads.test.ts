@@ -139,8 +139,10 @@ describe('uploads — init and abort', () => {
     it('rejects a disallowed mime with 415, before anything is created', async () => {
       const response = await init(pdf({ name: 'archive.zip', mimeType: 'application/zip' }));
 
-      // 415, not the 400 the contract's mime enum would produce at the boundary: "we do not accept
-      // .zip" is a different thing to tell a user than "your request was malformed".
+      // 415, not 400. "We do not accept .zip" is a different thing to tell a user than "your
+      // request was malformed", and the upload queue branches on the difference. CCP-8 took the
+      // allowlist out of the request schema for exactly this reason, so the boundary now accepts
+      // any non-empty string and `UploadsService` decides membership.
       expect(response.status).toBe(415);
       expect(ApiError.parse(response.body).code).toBe('UNSUPPORTED_TYPE');
 
@@ -203,6 +205,29 @@ describe('uploads — init and abort', () => {
     it('rejects a malformed body without reaching storage', async () => {
       const response = await init({ parentId: seeded.legalId, name: 'x.pdf', sizeBytes: -1 });
       expect(response.status).toBe(400);
+      expect(harness.storage.minted).toEqual([]);
+    });
+
+    /**
+     * The boundary validates with the frozen `InitUploadBody` itself — `routes.test.ts` proves that
+     * by identity, and these two prove the consequence over HTTP. `.strict()` and `.min(1)` are the
+     * two rules a widened local schema is most likely to lose, and losing either is silent: the
+     * request still succeeds, just against a shape the contract never promised.
+     */
+    it('rejects an unknown field, because the frozen schema is strict', async () => {
+      const response = await init(pdf({ role: 'owner' }));
+      expect(response.status).toBe(400);
+      expect(ApiError.parse(response.body).code).toBe('VALIDATION_FAILED');
+      expect(harness.storage.minted).toEqual([]);
+    });
+
+    it('rejects an empty mime type as malformed, not as an unsupported type', async () => {
+      const response = await init(pdf({ mimeType: '' }));
+
+      // `''` fails the shape rule, so it is 400 — while `application/zip`, a well-formed value the
+      // product declines, is 415. The two answers come from different layers on purpose.
+      expect(response.status).toBe(400);
+      expect(ApiError.parse(response.body).code).toBe('VALIDATION_FAILED');
       expect(harness.storage.minted).toEqual([]);
     });
   });

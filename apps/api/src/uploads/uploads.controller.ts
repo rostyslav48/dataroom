@@ -11,6 +11,7 @@ import {
   UseGuards,
 } from '@nestjs/common';
 import {
+  InitUploadBody,
   endpoints,
   type CompleteUploadResponse,
   type InitUploadResponse,
@@ -22,7 +23,6 @@ import { errors } from '../common/domain-error';
 import { validate } from '../common/zod-validation.pipe';
 import { OwnerGuard, ReadAccessGuard } from '../permissions/access.guard';
 import { Resource } from '../permissions/resource.decorator';
-import { InitUploadRequest } from './upload-request.schema';
 import { UploadsService } from './uploads.service';
 
 /** What Nest's `@Redirect()` expects back from a handler. */
@@ -44,12 +44,18 @@ interface Redirection {
 export class UploadsController {
   constructor(private readonly uploads: UploadsService) {}
 
+  /**
+   * Validated with the frozen `InitUploadBody`, not a local variant of it. The mime allowlist is
+   * enforced one layer down, in `UploadsService`, because non-membership is `415 UNSUPPORTED_TYPE`
+   * rather than `400 VALIDATION_FAILED` — a distinction the upload queue branches on. CCP-8 moved
+   * that rule out of the request schema so the two statements stop contradicting each other.
+   */
   @Post(endpoints.uploads.init.path)
   @HttpCode(HttpStatus.CREATED)
   @Resource('node', 'parentId', 'body')
   @UseGuards(OwnerGuard)
   init(
-    @Body(validate(InitUploadRequest)) body: InitUploadRequest,
+    @Body(validate(InitUploadBody)) body: InitUploadBody,
     @CurrentIdentity() identity: Identity,
   ): Promise<InitUploadResponse> {
     if (!isUser(identity)) throw errors.unauthenticated();

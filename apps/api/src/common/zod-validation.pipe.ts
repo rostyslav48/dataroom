@@ -12,7 +12,13 @@ import { errors } from './domain-error';
 export class ZodValidationPipe<TOut, TIn = unknown>
   implements PipeTransform<unknown, TOut>
 {
-  constructor(private readonly schema: ZodType<TOut, ZodTypeDef, TIn>) {}
+  /**
+   * `schema` is public because the route meta-test reads it back off the pipe instance. Proving a
+   * route carries *a* Zod pipe is not the guarantee worth having — a widened local schema satisfies
+   * it — so `test/contract/routes.test.ts` compares this reference against the frozen contract
+   * schema for that endpoint.
+   */
+  constructor(public readonly schema: ZodType<TOut, ZodTypeDef, TIn>) {}
 
   transform(value: unknown): TOut {
     const result = this.schema.safeParse(value);
