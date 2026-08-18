@@ -8,8 +8,10 @@ import { GoogleCallbackGuard, GoogleStartGuard } from '../../src/auth/google-aut
 import { configureApp } from '../../src/bootstrap';
 import { AppConfig } from '../../src/config/app.config';
 import { UserEntity } from '../../src/database/entities';
+import { STORAGE_SERVICE } from '../../src/storage/storage.service';
 import type { GoogleIdentity } from '../../src/users/users.service';
 import { resetDatabase } from './database';
+import { FakeStorageService } from './fake-storage';
 
 /**
  * The real application — real modules, real database, real middleware stack via `configureApp`.
@@ -23,6 +25,11 @@ export interface TestHarness {
   app: INestApplication;
   dataSource: DataSource;
   config: AppConfig;
+  /**
+   * The in-memory object store standing in for Supabase. `putObject` is the browser's `PUT`, and
+   * `minted` is the record every TTL and disposition assertion reads.
+   */
+  storage: FakeStorageService;
   /** Set this before driving `/auth/google/callback`. */
   googleProfile: { current: GoogleIdentity | null };
   accessTokenFor(user: Pick<UserEntity, 'id' | 'email'>): Promise<string>;
@@ -73,11 +80,19 @@ class TestGoogleCallbackGuard implements CanActivate {
 }
 
 export async function createTestHarness(): Promise<TestHarness> {
+  const storage = new FakeStorageService();
+
   const moduleRef = await Test.createTestingModule({ imports: [AppModule] })
     .overrideGuard(GoogleStartGuard)
     .useClass(TestGoogleStartGuard)
     .overrideGuard(GoogleCallbackGuard)
     .useClass(TestGoogleCallbackGuard)
+    // The second and last substitution in the whole suite. Supabase Storage is a network round trip
+    // to a third party with credentials CI does not have, and the states that matter here — object
+    // missing, size disagreeing with what was declared — are awkward to arrange against the real
+    // thing and trivial in memory. The interface exists so this costs nothing.
+    .overrideProvider(STORAGE_SERVICE)
+    .useValue(storage)
     .compile();
 
   const app = moduleRef.createNestApplication({ logger: false });
@@ -98,11 +113,13 @@ export async function createTestHarness(): Promise<TestHarness> {
     app,
     dataSource,
     config,
+    storage,
     googleProfile,
     accessTokenFor,
     authHeader: async (user) => ({ Authorization: `Bearer ${await accessTokenFor(user)}` }),
     reset: async () => {
       googleProfile.current = null;
+      storage.reset();
       await resetDatabase(dataSource);
     },
     close: async () => {
