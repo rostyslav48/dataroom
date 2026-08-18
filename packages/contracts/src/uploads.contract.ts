@@ -49,7 +49,14 @@ export const InitUploadBody = z
      * cannot act on is the surprise `06-edge-cases.md` decided against. See CCP-5.
      */
     sizeBytes: z.number().int().nonnegative(),
-    mimeType: AllowedMimeType,
+    /**
+     * Any non-empty string on the wire. Allowlist membership is a *domain* rule, not a shape rule:
+     * a type outside `ALLOWED_MIME_TYPES` is `415 UNSUPPORTED_TYPE`, never `400 VALIDATION_FAILED`.
+     * "We do not accept .zip" is a different thing to tell a user than "your request was
+     * malformed", and the upload queue branches on the difference. Validating the enum here would
+     * make `UNSUPPORTED_TYPE` — a code this package defines and maps to 415 — unreachable. See CCP-8.
+     */
+    mimeType: z.string().min(1),
   })
   .strict();
 export type InitUploadBody = z.infer<typeof InitUploadBody>;
