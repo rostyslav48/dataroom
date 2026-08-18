@@ -96,19 +96,17 @@ describe('RoomsPage', () => {
     expect(screen.getByLabelText('Name')).toHaveValue('Project Delta');
   });
 
-  it('lists a room shared with the user in its own section', async () => {
-    state.sharedRooms = [
-      {
-        ...fixtures.dataRoom,
-        id: '00000000-0000-4000-8000-0000000000bb',
-        name: 'Project Shared',
-        access: 'viewer',
-        ownerName: 'Acme Owner',
-        rootNodeId: fixtures.IDS.folderFin,
-      },
-    ];
+  it('lists a room shared with the user in its own section, named for the share root', async () => {
+    // The permissioned recipient of the fixture share on `Legal`, not a hand-built room row: the
+    // list they see is whatever the mock's projection produces, so this test moves when it does.
+    state.currentUserId = fixtures.IDS.viewer;
     renderPage();
+
     expect(await screen.findByRole('heading', { name: 'Shared with me' })).toBeInTheDocument();
-    expect(screen.getByRole('link', { name: /Project Shared/ })).toBeInTheDocument();
+    const entry = screen.getByRole('link', { name: /Legal/ });
+    expect(entry).toHaveTextContent('1 file · 1.0 MB');
+    expect(entry).toHaveTextContent(`Shared by ${fixtures.users.owner.name}`);
+    expect(screen.queryByRole('heading', { name: 'Owned' })).not.toBeInTheDocument();
+    expect(screen.queryByText('Project Atlas')).not.toBeInTheDocument();
   });
 });

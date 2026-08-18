@@ -30,7 +30,6 @@ export interface MockState {
   /** null means "no session": `/me` and `/auth/refresh` then answer 401. */
   currentUserId: string | null;
   rooms: DataRoomDto[];
-  sharedRooms: DataRoomDto[];
   nodes: Map<string, NodeDto>;
   /** Ids that existed and were deleted, so the mock can answer 410 ITEM_GONE rather than 404. */
   deletedIds: Set<string>;
@@ -65,7 +64,6 @@ function initialNodes(): Map<string, NodeDto> {
 export const state: MockState = {
   currentUserId: fixtures.IDS.owner,
   rooms: [clone(fixtures.dataRoom)],
-  sharedRooms: [],
   nodes: initialNodes(),
   deletedIds: new Set(),
   shares: Object.values(fixtures.shares).map((share) => clone(share)),
@@ -79,7 +77,6 @@ export function resetDb(): void {
   seq = 0;
   state.currentUserId = fixtures.IDS.owner;
   state.rooms = [clone(fixtures.dataRoom)];
-  state.sharedRooms = [];
   state.nodes = initialNodes();
   state.deletedIds = new Set();
   state.shares = Object.values(fixtures.shares).map((share) => clone(share));
@@ -271,6 +268,85 @@ export function liveShareForToken(token: string): ShareDto | undefined {
 
 export function shareTokenOf(share: ShareDto): string | null {
   return state.shareTokens.get(share.id) ?? null;
+}
+
+/** Live permissioned grants this user holds: share live, and their own recipient row not revoked. */
+export function permissionedSharesFor(userId: string): ShareDto[] {
+  const now = Date.now();
+  return state.shares.filter(
+    (share) =>
+      share.type === 'permissioned' &&
+      share.revokedAt === null &&
+      (share.expiresAt === null || Date.parse(share.expiresAt) >= now) &&
+      share.recipients.some(
+        (recipient) => recipient.userId === userId && recipient.revokedAt === null,
+      ),
+  );
+}
+
+/** Distance from the room root, which is what makes "the shallowest share" well defined. */
+export function depthOf(id: string): number {
+  return ancestorsOf(id).length;
+}
+
+// ── the share-root projection ────────────────────────────────────────────────────────────────
+
+/**
+ * A room as its recipient sees it: **projected onto their share root**.
+ *
+ * The real API answers this way because a recipient cannot read the room root. Its name, its id
+ * and its rollups all belong to the grant, not to the room — sending the room's own values would
+ * both produce a sidebar link that 403s on click and disclose the size of content outside the
+ * grant. `id`, `ownerId`, `ownerName` and the timestamps stay the room's: those are what the
+ * recipient is entitled to know about *which* room this is.
+ *
+ * Mocking this is not a nicety. Both shapes satisfy `DataRoomDto.strict()`, so a contract test
+ * cannot tell them apart and only a mock that projects will show the UI what it will really get.
+ */
+export function projectRoomOntoShareRoot(room: DataRoomDto, shareRoot: NodeDto): DataRoomDto {
+  return {
+    ...room,
+    name: shareRoot.name,
+    rootNodeId: shareRoot.id,
+    access: 'viewer',
+    fileCount: shareRoot.type === 'folder' ? (shareRoot.subtreeFileCount ?? 0) : 1,
+    sizeBytes:
+      shareRoot.type === 'folder' ? (shareRoot.subtreeSizeBytes ?? 0) : (shareRoot.sizeBytes ?? 0),
+  };
+}
+
+/** The node this user enters `roomId` by: the shallowest of the grants they hold inside it. */
+export function shallowestShareRootIn(userId: string, roomId: string): NodeDto | undefined {
+  let shallowest: NodeDto | undefined;
+  for (const share of permissionedSharesFor(userId)) {
+    const node = getNode(share.nodeId);
+    if (node === undefined || node.dataRoomId !== roomId) continue;
+    if (shallowest === undefined || depthOf(node.id) < depthOf(shallowest.id)) shallowest = node;
+  }
+  return shallowest;
+}
+
+/**
+ * `sharedWithMe`, projected. A room appears **once** however many grants the caller holds in it,
+ * entered at the shallowest — several entries for one room would read as several rooms.
+ */
+export function sharedRoomsFor(userId: string | null): DataRoomDto[] {
+  if (userId === null) return [];
+  return state.rooms.flatMap((room) => {
+    if (room.ownerId === userId) return [];
+    const shareRoot = shallowestShareRootIn(userId, room.id);
+    return shareRoot === undefined ? [] : [projectRoomOntoShareRoot(room, shareRoot)];
+  });
+}
+
+/** The share root a permissioned recipient reads `nodeId` through, or null if no grant covers it. */
+export function coveringShareRootFor(userId: string, nodeId: string): string | null {
+  let covering: string | null = null;
+  for (const share of permissionedSharesFor(userId)) {
+    if (!isDescendantOf(nodeId, share.nodeId)) continue;
+    if (covering === null || depthOf(share.nodeId) < depthOf(covering)) covering = share.nodeId;
+  }
+  return covering;
 }
 
 export function makeRecipient(email: string): ShareRecipientDto {

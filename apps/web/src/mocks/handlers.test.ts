@@ -9,6 +9,7 @@ import {
   createFolder,
   createShare,
   deleteNode,
+  getDataRoom,
   getDeletePreview,
   getMe,
   getNode,
@@ -77,6 +78,100 @@ describe('fixtures are served', () => {
     const resolved = await resolveShare(fixtures.PUBLIC_LINK_TOKEN);
     expect(resolved.nodeId).toBe(IDS.folderFin);
     expect(resolved.nodeName).toBe('Financials');
+  });
+});
+
+describe('a shared room is projected onto the caller’s share root', () => {
+  // Both shapes satisfy `DataRoomDto.strict()`, so these assertions — not the contract tests —
+  // are what keeps the mock honest about what a recipient actually receives.
+  it('names a shared room for the share root and reports the share root’s rollups', async () => {
+    state.currentUserId = IDS.viewer;
+    const rooms = await listDataRooms();
+
+    expect(rooms.owned).toEqual([]);
+    expect(rooms.sharedWithMe).toHaveLength(1);
+    expect(rooms.sharedWithMe[0]).toMatchObject({
+      id: IDS.room, // the room's id: which room it is, is not a secret
+      name: 'Legal', // …but its name, entry point and rollups are the grant's
+      rootNodeId: IDS.folderLegal,
+      access: 'viewer',
+      fileCount: 1,
+      sizeBytes: 1_048_576,
+      ownerName: fixtures.users.owner.name,
+    });
+  });
+
+  it('lists the room once when the caller holds several grants, entered at the shallowest', async () => {
+    await createShare(IDS.folderQ3, { type: 'permissioned', recipients: ['viewer@example.com'] });
+    state.currentUserId = IDS.viewer;
+
+    const rooms = await listDataRooms();
+    expect(rooms.sharedWithMe).toHaveLength(1);
+    expect(rooms.sharedWithMe[0]?.rootNodeId).toBe(IDS.folderLegal);
+  });
+
+  it('projects GET /data-rooms/:id the same way for a recipient', async () => {
+    state.currentUserId = IDS.viewer;
+    const room = await getDataRoom(IDS.room);
+    expect(room).toMatchObject({ name: 'Legal', rootNodeId: IDS.folderLegal, access: 'viewer' });
+  });
+
+  it('projects GET /data-rooms/:id onto a share token, with no session at all', async () => {
+    state.currentUserId = null;
+    const room = await getDataRoom(IDS.room, { shareToken: fixtures.PUBLIC_LINK_TOKEN });
+    expect(room).toMatchObject({
+      name: 'Financials',
+      rootNodeId: IDS.folderFin,
+      access: 'viewer',
+      fileCount: 1,
+      sizeBytes: 1_572_864,
+    });
+  });
+
+  it('hides a room the caller neither owns nor holds a grant in', async () => {
+    state.currentUserId = IDS.stranger;
+    const error = await getDataRoom(IDS.room).catch((e: unknown) => e);
+    expect((error as ApiClientError).code).toBe('NOT_FOUND');
+    await expect(listDataRooms()).resolves.toEqual({ owned: [], sharedWithMe: [] });
+  });
+
+  it('drops a revoked grant from the list', async () => {
+    await revokeShare(IDS.sharePerm);
+    state.currentUserId = IDS.viewer;
+    await expect(listDataRooms()).resolves.toEqual({ owned: [], sharedWithMe: [] });
+  });
+});
+
+describe('a permissioned recipient reads through their grant', () => {
+  it('answers GET /nodes/:id with the share root’s name as dataRoomName', async () => {
+    state.currentUserId = IDS.viewer;
+    const detail = await getNode(IDS.fileNda);
+
+    expect(detail.access).toBe('viewer');
+    expect(detail.shareRootId).toBe(IDS.folderLegal);
+    expect(detail.dataRoomName).toBe('Legal');
+    expect(detail.breadcrumbs.map((crumb) => crumb.name)).toEqual(['Legal', 'NDA.pdf']);
+  });
+
+  it('still gives the owner the room’s own name', async () => {
+    const detail = await getNode(IDS.fileNda);
+    expect(detail.access).toBe('owner');
+    expect(detail.dataRoomName).toBe('Project Atlas');
+  });
+
+  it('forbids everything above and beside the grant', async () => {
+    state.currentUserId = IDS.viewer;
+    for (const id of [IDS.rootNode, IDS.folderFin, IDS.fileOrphan]) {
+      const error = await getNode(id).catch((e: unknown) => e);
+      expect((error as ApiClientError).code, id).toBe('FORBIDDEN');
+    }
+  });
+
+  it('still answers ITEM_GONE, not FORBIDDEN, for a deleted node inside the grant', async () => {
+    await deleteNode(IDS.fileNda);
+    state.currentUserId = IDS.viewer;
+    const error = await getNode(IDS.fileNda).catch((e: unknown) => e);
+    expect((error as ApiClientError).code).toBe('ITEM_GONE');
   });
 });
 

@@ -25,6 +25,7 @@ import {
 import {
   ancestorsOf,
   childrenOf,
+  coveringShareRootFor,
   getNode,
   insertNode,
   isDescendantOf,
@@ -34,9 +35,12 @@ import {
   nameTaken,
   nextAvailableName,
   paginate,
+  projectRoomOntoShareRoot,
   publicLinkUrl,
   recomputeRollups,
   removeSubtree,
+  shallowestShareRootIn,
+  sharedRoomsFor,
   state,
   statsFor,
   subtreeOf,
@@ -98,19 +102,30 @@ interface ResolvedAccess {
   shareRootId: string;
 }
 
+/** A live share for this token, or the designed failure that explains why there isn't one. */
+function shareForToken(token: string): ShareDto | Response {
+  const share = findShareByToken(token);
+  if (share === undefined) return apiError('NOT_FOUND', 'Unknown share token');
+  if (share.revokedAt !== null) return apiError('ACCESS_REVOKED', 'This share was revoked');
+  if (share.expiresAt !== null && Date.parse(share.expiresAt) < Date.now()) {
+    return apiError('SHARE_EXPIRED', 'This share expired');
+  }
+  return share;
+}
+
 /**
- * The permission answer, modelled the way the backend's guard answers it: a share token scopes
- * the caller to one subtree, and everything outside it is FORBIDDEN rather than merely absent.
+ * The permission answer, modelled the way the backend's guard answers it: a grant — a token, or a
+ * permissioned share held by the signed-in caller — scopes them to one subtree, and everything
+ * outside it is FORBIDDEN rather than merely absent.
+ *
+ * A caller who is neither the room's owner nor a recipient is refused, so "the mock always says
+ * owner" can never again hide a viewer-only bug.
  */
 function resolveAccess(nodeId: string, request: Request): ResolvedAccess | Response {
   const token = request.headers.get(SHARE_TOKEN_HEADER);
   if (token !== null && token !== '') {
-    const share = findShareByToken(token);
-    if (share === undefined) return apiError('NOT_FOUND', 'Unknown share token');
-    if (share.revokedAt !== null) return apiError('ACCESS_REVOKED', 'This share was revoked');
-    if (share.expiresAt !== null && Date.parse(share.expiresAt) < Date.now()) {
-      return apiError('SHARE_EXPIRED', 'This share expired');
-    }
+    const share = shareForToken(token);
+    if (isResponse(share)) return share;
     if (!isDescendantOf(nodeId, share.nodeId)) {
       return apiError('FORBIDDEN', 'Outside the shared subtree');
     }
@@ -119,13 +134,25 @@ function resolveAccess(nodeId: string, request: Request): ResolvedAccess | Respo
 
   const unauthenticated = requireSession();
   if (unauthenticated !== null) return unauthenticated;
+  const userId = state.currentUserId ?? '';
 
   if (state.forcedAccess === 'viewer') {
     return { access: 'viewer', shareRootId: state.forcedShareRootId ?? nodeId };
   }
+
   const node = getNode(nodeId);
-  const room = state.rooms.find((candidate) => candidate.id === node?.dataRoomId);
-  return { access: 'owner', shareRootId: room?.rootNodeId ?? fixtures.IDS.rootNode };
+  // A node that is gone has no permissions left to evaluate; `nodeOr404` answers 404 or 410.
+  if (node === undefined) return { access: 'owner', shareRootId: fixtures.IDS.rootNode };
+
+  const room = state.rooms.find((candidate) => candidate.id === node.dataRoomId);
+  if (room !== undefined && room.ownerId === userId) {
+    return { access: 'owner', shareRootId: room.rootNodeId };
+  }
+
+  const shareRootId = coveringShareRootFor(userId, nodeId);
+  if (shareRootId !== null) return { access: 'viewer', shareRootId };
+  if (room === undefined) return { access: 'owner', shareRootId: fixtures.IDS.rootNode };
+  return apiError('FORBIDDEN', 'You have no grant covering this item');
 }
 
 function nodeOr404(id: string): NodeDto | Response {
@@ -205,8 +232,9 @@ const specs: HandlerSpec[] = [
       const forced = takeForcedError('auth.refresh', request.url);
       if (forced !== null) return apiError(forced, `Forced ${forced}`);
       if (state.currentUserId === null) return apiError('UNAUTHENTICATED', 'No refresh cookie');
+      const signedIn = Object.values(fixtures.users).find((u) => u.id === state.currentUserId);
       return HttpResponse.json({
-        user: fixtures.users.owner,
+        user: signedIn ?? fixtures.users.owner,
         accessToken: `mock-access-token-${String(Date.now())}`,
         accessTokenExpiresAt: new Date(Date.now() + 15 * 60_000).toISOString(),
       });
@@ -242,7 +270,12 @@ const specs: HandlerSpec[] = [
       if (forced !== null) return apiError(forced, `Forced ${forced}`);
       const unauthenticated = requireSession();
       if (unauthenticated !== null) return unauthenticated;
-      return HttpResponse.json({ owned: state.rooms, sharedWithMe: state.sharedRooms });
+      const userId = state.currentUserId ?? '';
+      return HttpResponse.json({
+        owned: state.rooms.filter((room) => room.ownerId === userId),
+        // Projected onto each share root, exactly as the API does it.
+        sharedWithMe: sharedRoomsFor(userId),
+      });
     },
   },
   {
@@ -283,11 +316,32 @@ const specs: HandlerSpec[] = [
     resolve: ({ request, params }) => {
       const forced = takeForcedError('dataRooms.get', request.url);
       if (forced !== null) return apiError(forced, `Forced ${forced}`);
+      const id = param(params, 'id');
+      const room = state.rooms.find((candidate) => candidate.id === id);
+
+      // A token carries its own grant, so this branch answers with no session at all.
+      const token = request.headers.get(SHARE_TOKEN_HEADER);
+      if (token !== null && token !== '') {
+        const share = shareForToken(token);
+        if (isResponse(share)) return share;
+        const shareRoot = getNode(share.nodeId);
+        if (room === undefined || shareRoot === undefined || shareRoot.dataRoomId !== id) {
+          return apiError('NOT_FOUND', 'No such data room');
+        }
+        return HttpResponse.json(projectRoomOntoShareRoot(room, shareRoot));
+      }
+
       const unauthenticated = requireSession();
       if (unauthenticated !== null) return unauthenticated;
-      const id = param(params, 'id');
-      const room = [...state.rooms, ...state.sharedRooms].find((candidate) => candidate.id === id);
-      return room === undefined ? apiError('NOT_FOUND', 'No such data room') : HttpResponse.json(room);
+      const userId = state.currentUserId ?? '';
+      if (room === undefined) return apiError('NOT_FOUND', 'No such data room');
+      if (room.ownerId === userId) return HttpResponse.json(room);
+
+      const shareRoot = shallowestShareRootIn(userId, room.id);
+      // A room the caller holds no grant in is not merely unreadable — it is not theirs to know of.
+      return shareRoot === undefined
+        ? apiError('NOT_FOUND', 'No such data room')
+        : HttpResponse.json(projectRoomOntoShareRoot(room, shareRoot));
     },
   },
   {
@@ -335,12 +389,18 @@ const specs: HandlerSpec[] = [
       const node = nodeOr404(id);
       if (isResponse(node)) return node;
       const room = state.rooms.find((candidate) => candidate.id === node.dataRoomId);
+      // For a viewer this names their share root, not the room: the room's name is outside the
+      // grant, and this string is what the chrome above the breadcrumbs shows.
+      const dataRoomName =
+        access.access === 'viewer'
+          ? (getNode(access.shareRootId)?.name ?? node.name)
+          : (room?.name ?? fixtures.dataRoom.name);
       return HttpResponse.json({
         node,
         breadcrumbs: breadcrumbsFor(id, access.shareRootId),
         access: access.access,
         shareRootId: access.shareRootId,
-        dataRoomName: room?.name ?? fixtures.dataRoom.name,
+        dataRoomName,
       });
     },
   },
