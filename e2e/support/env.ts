@@ -56,3 +56,18 @@ export function env(): E2EEnv {
   };
   return cached;
 }
+
+/**
+ * Whether the API under test is wired to a **real** object store.
+ *
+ * `POST /uploads/init` mints a signed upload URL before it answers, so against a placeholder
+ * Supabase host it 500s and every byte-moving flow fails for a reason that has nothing to do with
+ * the behaviour under test. Set `E2E_STORAGE_READY=true` once HUMAN-3 has provisioned a bucket
+ * with CORS; until then those specs skip with the blocker named, which is the honest report — a
+ * permanently red suite teaches everyone to ignore it.
+ *
+ * Deliberately *not* part of `env()`: a `test.skip(...)` runs while Playwright is collecting the
+ * file, and `env()` throws there when the stack variables are absent — which would make
+ * `playwright test --list` fail instead of listing.
+ */
+export const storageReady = (): boolean => process.env.E2E_STORAGE_READY === 'true';

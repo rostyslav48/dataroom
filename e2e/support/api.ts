@@ -14,6 +14,7 @@ import {
   NodeDto,
   ResolveShareResponse,
   ShareDto,
+  ERROR_STATUS,
   SHARE_TOKEN_HEADER,
   endpoints,
 } from './contracts';
@@ -137,11 +138,17 @@ export class Api {
   }
 
   /**
-   * Assert a request is refused, and refused *for the stated reason*.
+   * Assert a request is refused, refused *for the stated reason*, and refused with the status the
+   * contract maps that reason to.
    *
    * The code matters more than the status: 403 covers FORBIDDEN, ACCESS_REVOKED, SHARE_EXPIRED and
    * WRONG_ACCOUNT, and the frontend renders a different screen for each. A test that accepted any
    * 403 would pass while the user saw the wrong one.
+   *
+   * The status is asserted too, from `ERROR_STATUS` rather than from a number written here — so the
+   * expectation cannot drift from the contract, and a spec that names the wrong code fails on both
+   * axes instead of one. Wave 7 QA found three assertions in this suite naming a code the API never
+   * returns for that case; this makes that class of mistake louder.
    */
   async expectDenied(
     method: 'get' | 'post' | 'patch' | 'delete',
@@ -157,6 +164,9 @@ export class Api {
 
     const error = ApiError.parse(JSON.parse(body));
     expect(error.code, `${method.toUpperCase()} ${path}`).toBe(code);
+    expect(response.status(), `${method.toUpperCase()} ${path} — status for ${code}`).toBe(
+      ERROR_STATUS[code],
+    );
     return error;
   }
 

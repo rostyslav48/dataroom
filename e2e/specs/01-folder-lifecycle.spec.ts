@@ -47,7 +47,7 @@ test.describe('flow 1 — folder lifecycle', () => {
         await ui.folderNameInput.fill(name);
         await ui.folderNameSubmit.click();
         await expect(ui.rowByName(name)).toBeVisible();
-        await ui.rowByName(name).click();
+        await ui.openRow(name).click();
         await expect(ui.breadcrumbs).toContainText(name);
       }
 
@@ -73,8 +73,13 @@ test.describe('flow 1 — folder lifecycle', () => {
       await ui.renameInput.fill('Reports');
       await ui.renameInput.press('Enter');
       await expect(ui.renameError).toBeVisible();
+      // The field stays open so the name can be corrected in place, and the optimistic rename rolls
+      // back to the committed name — SPEC-07's "optimistic rename rolls back visibly on error".
+      // The rejected text is *not* kept: rollback restores `node.name`, and the field is seeded
+      // from it. Asserting the typing survived would be asserting against the rollback.
       await expect(ui.renameInput).toBeVisible();
-      await expect(ui.renameInput).toHaveValue('Reports'); // the typing survives the error
+      await expect(ui.renameInput).toHaveValue('Contracts');
+      await expect(ui.rowByName('Reports')).toHaveCount(1);
 
       await ui.renameInput.fill('Agreements');
       await ui.renameInput.press('Enter');

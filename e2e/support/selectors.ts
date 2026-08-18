@@ -3,42 +3,31 @@ import type { Locator, Page } from '@playwright/test';
 /**
  * Every UI locator in the suite, in one file.
  *
- * ## Read this before fixing a failing selector
+ * ## What changed in Wave 8
  *
- * These specs were written while `apps/web` was still a routed shell, from the component names and
- * copy in SPEC-06 through SPEC-09. That is deliberate — E2E is INT-5's deliverable and had to be
- * authored ahead of the UI it drives — but it means the *names* below are a prediction, and some of
- * them will be wrong. Centralising them makes reconciling the suite with the real DOM a single
- * edit here rather than a hunt through five spec files.
+ * These specs were written while `apps/web` was still a routed shell, from the component names in
+ * SPEC-06 through SPEC-09, so the locators below started life as a *prediction* of the DOM. That
+ * prediction was never checked against a running app: nothing was deployed, and the suite's twenty
+ * browser-driven tests had never been executed at all.
  *
- * Each locator is `testId.or(role)`: the test id if the frontend exposes one, otherwise the
- * accessible role and name the spec pins. That ordering is on purpose — a `data-testid` is a
- * contract the frontend can honour cheaply, while an accessible name is real user-facing copy that
- * will get reworded. The role fallback keeps the suite running until the ids land.
+ * They have now been run against a live local stack — real Postgres, real API, real Vite build —
+ * and this file is the reconciliation. Almost none of the predicted `data-testid`s exist: the app
+ * that was built is addressed through roles and accessible names instead, which is the better of
+ * the two anyway because it fails when a screen stops being usable rather than when a helper
+ * attribute is renamed.
  *
- * ## Test ids this suite expects
- *
- * Listed here so the frontend track has one place to read them from:
- *
- *   room-list · room-list-item · new-room-button · room-name-input · room-name-submit
- *   breadcrumbs · breadcrumb-item · node-table · node-row · node-name · node-size
- *   node-actions · new-folder-button · folder-name-input · folder-name-submit
- *   rename-input · rename-error · upload-button · file-input
- *   delete-dialog · delete-preview-summary · delete-confirm · delete-name-input
- *   upload-queue · upload-item · upload-progress
- *   pdf-viewer · pdf-page · unsupported-preview · download-button
- *   share-button · share-dialog · share-link-tab · share-people-tab · share-link-url
- *   share-copy · share-revoke · share-revoke-confirm · recipient-email-input · recipient-row
- *   shared-layout · owner-layout
- *   state-forbidden · state-access-revoked · state-share-expired · state-item-gone
- *   state-wrong-account · state-not-found
- *
- * `node-row` must also carry `data-node-id` so a spec can address one row unambiguously; two
+ * Three test ids *do* exist and are used here: `node-row-<id>` (per row), `shared-banner`, and
+ * `toast-region`. Rows also carry `data-node-row="<id>"`, which is what `rowById` addresses — two
  * folders may legitimately share a name across a move, and matching on text alone makes a rename
- * test pass for the wrong row.
+ * test assert against the wrong row.
+ *
+ * ## Still unverified
+ *
+ * The upload queue and the PDF viewer locators cannot be exercised until a real storage bucket
+ * exists (HUMAN-3): `POST /uploads/init` mints a signed URL, and against a placeholder Supabase
+ * host that call 500s before any UI appears. Those entries are marked below and remain predictions
+ * — do not read a green suite as covering them.
  */
-
-const either = (byTestId: Locator, byRole: Locator): Locator => byTestId.or(byRole);
 
 export const routes = {
   rooms: () => '/rooms',
@@ -50,122 +39,120 @@ export const routes = {
 };
 
 export function ui(page: Page) {
+  const main = page.getByRole('main');
+  const dialog = page.getByRole('dialog');
+  const breadcrumbNav = page.getByRole('navigation', { name: /breadcrumb/i });
+  /** Body rows only. The header is also a `row`, and it contains the word "Name". */
+  const bodyRows = page.locator('[data-node-row]');
+
   return {
     // ── shell & rooms ───────────────────────────────────────────────────
-    roomList: page.getByTestId('room-list'),
-    roomListItem: (name: string) =>
-      either(
-        page.getByTestId('room-list-item').filter({ hasText: name }),
-        page.getByRole('link', { name }),
-      ),
-    newRoomButton: either(
-      page.getByTestId('new-room-button'),
-      page.getByRole('button', { name: /new (data )?room/i }),
-    ),
-    roomNameInput: either(page.getByTestId('room-name-input'), page.getByRole('textbox')),
-    roomNameSubmit: either(
-      page.getByTestId('room-name-submit'),
-      page.getByRole('button', { name: /^create$/i }),
-    ),
+    // The room list is rendered twice — once in the sidebar nav, once in the page body — so every
+    // room locator is scoped to `main`, or Playwright's strict mode fails on the duplicate.
+    roomList: main.getByRole('list').first(),
+    roomListItem: (name: string) => main.getByRole('link', { name }),
+    newRoomButton: main.getByRole('button', { name: /new (data )?room/i }).first(),
+    roomNameInput: dialog.getByRole('textbox', { name: /name/i }),
+    roomNameSubmit: dialog.getByRole('button', { name: /^create$/i }),
 
     // ── browser ─────────────────────────────────────────────────────────
-    breadcrumbs: either(page.getByTestId('breadcrumbs'), page.getByRole('navigation', { name: /breadcrumb/i })),
-    breadcrumbItems: page.getByTestId('breadcrumb-item'),
-    breadcrumbLink: (name: string) =>
-      either(
-        page.getByTestId('breadcrumb-item').filter({ hasText: name }),
-        page.getByRole('navigation', { name: /breadcrumb/i }).getByText(name, { exact: true }),
-      ),
+    breadcrumbs: breadcrumbNav,
+    breadcrumbItems: breadcrumbNav.getByRole('listitem'),
+    breadcrumbLink: (name: string) => breadcrumbNav.getByRole('link', { name }),
 
-    nodeTable: either(page.getByTestId('node-table'), page.getByRole('table')),
-    rows: page.getByTestId('node-row'),
-    rowById: (nodeId: string) => page.locator(`[data-node-id="${nodeId}"]`),
+    // `role="grid"`, not `table`: the folder listing is a keyboard-navigable grid.
+    nodeTable: page.getByRole('grid', { name: /folder contents/i }),
+    rows: bodyRows,
+    rowById: (nodeId: string) => page.locator(`[data-node-row="${nodeId}"]`),
+    /**
+     * Matched on the **name cell**, not on the row's text. Every row also renders its modified date
+     * — "18 Aug 2026" — so a row named `2026` matched every sibling in the folder, and an assertion
+     * that a row had gone found somebody else's date and passed for the wrong reason.
+     */
     rowByName: (name: string) =>
-      either(
-        page.getByTestId('node-row').filter({ hasText: name }),
-        page.getByRole('row').filter({ hasText: name }),
-      ),
-    /** The action menu trigger inside a row — Rename · Move · Share · Download · Delete. */
-    rowActions: (row: Locator) =>
-      either(row.getByTestId('node-actions'), row.getByRole('button', { name: /actions|more/i })),
+      bodyRows.filter({ has: page.getByRole('button', { name, exact: true }) }),
+    /**
+     * Opening a node. The row is a grid row, not a link — the name cell holds the button that
+     * navigates, and clicking the row's own box may land on a size or date cell instead.
+     */
+    openRow: (name: string) =>
+      // `exact`: the row's other button is "Actions for <name>", which a substring match also hits.
+      bodyRows
+        .filter({ has: page.getByRole('button', { name, exact: true }) })
+        .getByRole('button', { name, exact: true }),
+    /** The action menu trigger inside a row — Rename · Move · Share · Delete. */
+    rowActions: (row: Locator) => row.getByRole('button', { name: /^actions for /i }),
     menuItem: (name: RegExp) => page.getByRole('menuitem', { name }),
 
-    newFolderButton: either(
-      page.getByTestId('new-folder-button'),
-      page.getByRole('button', { name: /new folder/i }),
-    ),
-    folderNameInput: either(
-      page.getByTestId('folder-name-input'),
-      page.getByRole('dialog').getByRole('textbox'),
-    ),
-    folderNameSubmit: either(
-      page.getByTestId('folder-name-submit'),
-      page.getByRole('button', { name: /^create$/i }),
-    ),
-    renameInput: either(page.getByTestId('rename-input'), page.getByRole('textbox', { name: /name/i })),
-    renameError: page.getByTestId('rename-error'),
+    // `.first()`: the toolbar carries one and the empty-state block offers a second.
+    newFolderButton: main.getByRole('button', { name: /new folder/i }).first(),
+    folderNameInput: dialog.getByRole('textbox'),
+    folderNameSubmit: dialog.getByRole('button', { name: /^create$/i }),
+    /** Renaming happens in place, in the row's name cell, not in a dialog. */
+    renameInput: page.getByRole('textbox', { name: /^rename /i }),
+    renameError: page.getByRole('alert'),
 
     // ── delete ──────────────────────────────────────────────────────────
-    deleteDialog: either(page.getByTestId('delete-dialog'), page.getByRole('alertdialog')),
-    deletePreview: page.getByTestId('delete-preview-summary'),
-    deleteNameInput: page.getByTestId('delete-name-input'),
-    deleteConfirm: either(
-      page.getByTestId('delete-confirm'),
-      page.getByRole('button', { name: /^delete$/i }),
-    ),
+    deleteDialog: page.getByRole('dialog', { name: /^delete /i }),
+    /** The server-counted blast radius, which is the first paragraph of the dialog body. */
+    deletePreview: page.getByRole('dialog', { name: /^delete /i }).getByRole('paragraph').first(),
+    deleteConfirm: page
+      .getByRole('dialog', { name: /^delete /i })
+      .getByRole('button', { name: /^delete$/i }),
 
     // ── uploads ─────────────────────────────────────────────────────────
-    uploadButton: either(page.getByTestId('upload-button'), page.getByRole('button', { name: /upload/i })),
+    // `Upload` must be exact: the dropzone renders a second button, "Choose files to upload".
+    uploadButton: main.getByRole('button', { name: 'Upload', exact: true }),
     fileInput: page.locator('input[type="file"]'),
-    uploadQueue: page.getByTestId('upload-queue'),
-    uploadItems: page.getByTestId('upload-item'),
-    uploadItemByName: (name: string) => page.getByTestId('upload-item').filter({ hasText: name }),
+    // UNVERIFIED — needs a real storage bucket (HUMAN-3). See the header note.
+    uploadQueue: page.getByTestId('upload-queue').or(page.getByRole('region', { name: /upload/i })),
+    uploadItems: page.getByTestId('upload-item').or(page.getByRole('listitem').filter({ hasText: /%|uploading|done/i })),
+    uploadItemByName: (name: string) =>
+      page.getByTestId('upload-item').or(page.getByRole('listitem')).filter({ hasText: name }),
 
     // ── viewer ──────────────────────────────────────────────────────────
-    pdfViewer: page.getByTestId('pdf-viewer'),
-    pdfPage: page.getByTestId('pdf-page'),
-    unsupportedPreview: page.getByTestId('unsupported-preview'),
-    downloadButton: either(
-      page.getByTestId('download-button'),
-      page.getByRole('button', { name: /download/i }),
-    ),
+    // UNVERIFIED for the same reason: react-pdf's own class names, since the app adds no test id.
+    pdfViewer: page.locator('.react-pdf__Document'),
+    pdfPage: page.locator('.react-pdf__Page'),
+    unsupportedPreview: page.getByText(/only pdfs can be previewed here/i),
+    downloadButton: page.getByRole('button', { name: /^download$/i }),
 
     // ── sharing ─────────────────────────────────────────────────────────
-    shareButton: either(page.getByTestId('share-button'), page.getByRole('button', { name: /^share$/i })),
-    shareDialog: either(page.getByTestId('share-dialog'), page.getByRole('dialog', { name: /shar/i })),
-    shareLinkTab: either(page.getByTestId('share-link-tab'), page.getByRole('tab', { name: /link/i })),
-    sharePeopleTab: either(page.getByTestId('share-people-tab'), page.getByRole('tab', { name: /people/i })),
-    shareLinkUrl: page.getByTestId('share-link-url'),
-    shareCopy: either(page.getByTestId('share-copy'), page.getByRole('button', { name: /copy/i })),
-    shareRevoke: either(page.getByTestId('share-revoke'), page.getByRole('button', { name: /revoke/i })),
-    shareRevokeConfirm: either(
-      page.getByTestId('share-revoke-confirm'),
-      page.getByRole('button', { name: /revoke/i }).last(),
-    ),
-    recipientEmailInput: either(
-      page.getByTestId('recipient-email-input'),
-      page.getByRole('textbox', { name: /email/i }),
-    ),
-    recipientRow: (email: string) => page.getByTestId('recipient-row').filter({ hasText: email }),
+    shareButton: main.getByRole('button', { name: 'Share', exact: true }),
+    shareDialog: page.getByRole('dialog', { name: /^share$/i }),
+    shareLinkTab: page.getByRole('tab', { name: /public link/i }),
+    sharePeopleTab: page.getByRole('tab', { name: /invite people/i }),
+    shareLinkUrl: page.getByRole('textbox', { name: /public link url/i }),
+    shareCopy: page.getByRole('button', { name: /^copy$/i }),
+    /**
+     * Revoking a link is two clicks: the trigger swaps itself for a danger-styled confirmation, so
+     * both steps carry the same accessible name and only one of them is on screen at a time.
+     */
+    shareRevoke: page.getByRole('button', { name: /revoke link/i }),
+    shareRevokeConfirm: page.getByRole('button', { name: /revoke link/i }),
+    recipientEmailInput: page.getByRole('textbox', { name: /invite by email/i }),
+    /** Typing an address only queues it; the share is created when this is pressed. */
+    inviteSubmit: page.getByRole('button', { name: /^invite\b/i }),
+    recipientRow: (email: string) => page.getByRole('listitem').filter({ hasText: email }),
+    /** Per-recipient removal — the only revocation the People tab offers. */
+    recipientRemove: (email: string) =>
+      page.getByRole('button', { name: `Remove access for ${email}` }),
+    recipientRemoveConfirm: page.getByRole('button', { name: /^remove$/i }),
 
     // ── layout, chosen from `access` and never from the route ───────────
-    sharedLayout: page.getByTestId('shared-layout'),
-    ownerLayout: page.getByTestId('owner-layout'),
+    sharedLayout: page.getByTestId('shared-banner'),
+    ownerLayout: page.getByRole('navigation', { name: /data rooms/i }),
 
     // ── the six designed access-failure screens ─────────────────────────
+    // Matched on the copy the app actually ships; each string is a substring of one `StateBlock`
+    // title in `features/shares/accessStates.tsx`.
     state: {
-      forbidden: either(page.getByTestId('state-forbidden'), page.getByText(/don't have access/i)),
-      accessRevoked: either(
-        page.getByTestId('state-access-revoked'),
-        page.getByText(/access was removed/i),
-      ),
-      shareExpired: either(page.getByTestId('state-share-expired'), page.getByText(/expired/i)),
-      itemGone: either(
-        page.getByTestId('state-item-gone'),
-        page.getByText(/(was|been) (deleted|removed) by the owner/i),
-      ),
-      wrongAccount: either(page.getByTestId('state-wrong-account'), page.getByText(/signed in as/i)),
-      notFound: either(page.getByTestId('state-not-found'), page.getByText(/isn't valid|not found/i)),
+      forbidden: page.getByText(/don't have access to this item/i),
+      accessRevoked: page.getByText(/access was removed by the owner/i),
+      shareExpired: page.getByText(/link has expired/i),
+      itemGone: page.getByText(/was deleted by the owner/i),
+      wrongAccount: page.getByText(/signed in with a different account/i),
+      notFound: page.getByText(/link isn't valid/i),
     },
   };
 }

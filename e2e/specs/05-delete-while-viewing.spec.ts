@@ -7,6 +7,7 @@ import {
   tokenFromShareUrl,
 } from '../support/fixtures';
 import { simulateRefocus } from '../support/focus';
+import { gotoShared } from '../support/shared-route';
 
 /**
  * FLOW 5 — delete a folder in context A while context B is viewing it → B refocuses → the gone
@@ -45,7 +46,7 @@ test.describe('flow 5 — deleted while viewing', () => {
     const viewer = await openAnonymous(browser);
     try {
       // ── B is looking at it ─────────────────────────────────────────────
-      await viewer.page.goto(routes.sharedFolder(token, doomed.id));
+      await gotoShared(viewer.page, routes.sharedFolder(token, doomed.id));
       await expect(viewer.ui.rowByName('Child Of Doomed')).toBeVisible();
 
       // ── A deletes it ───────────────────────────────────────────────────
@@ -58,8 +59,10 @@ test.describe('flow 5 — deleted while viewing', () => {
       // Not a stale list behind the message, and not a crash instead of one.
       await expect(viewer.ui.rowByName('Child Of Doomed')).toHaveCount(0);
 
-      // There is somewhere to go: the share root is still alive.
-      const backToRoot = viewer.page.getByRole('link', { name: /live room|back|share/i }).first();
+      // There is somewhere to go: the share root is still alive. The way back is the state block's
+      // own action button — below the share root the screen offers it, at the root it does not,
+      // which is the difference the next test pins.
+      const backToRoot = viewer.page.getByRole('button', { name: /back to the shared folder/i });
       await expect(backToRoot).toBeVisible();
       await backToRoot.click();
       await expect(viewer.ui.rowByName('Doomed')).toHaveCount(0);
@@ -80,6 +83,7 @@ test.describe('flow 5 — deleted while viewing', () => {
     browser,
     ownerApi,
     anonymousApi,
+    room,
     scratch,
   }) => {
     const shareRoot = await ownerApi.createFolder(scratch.folder.id, 'Doomed Root');
@@ -89,7 +93,7 @@ test.describe('flow 5 — deleted while viewing', () => {
 
     const viewer = await openAnonymous(browser);
     try {
-      await viewer.page.goto(routes.sharedEntry(token));
+      await gotoShared(viewer.page, routes.sharedEntry(token));
       await expect(viewer.ui.rowByName('Contents')).toBeVisible();
 
       // The delete preview warns that a live share is about to be destroyed — the count is part of
@@ -106,32 +110,55 @@ test.describe('flow 5 — deleted while viewing', () => {
 
       // Deleting a subtree auto-revokes every share rooted inside it, so the link is dead rather
       // than merely pointing at a dead node.
-      const revoked = (await ownerApi.sharesOf(shareRoot.id)).shares.find((s) => s.id === share.id);
-      expect(revoked?.revokedAt ?? null, 'the share should have been auto-revoked').not.toBeNull();
+      //
+      // Asked through the *room*, not through the node. `GET /nodes/:id/shares` is owner-guarded on
+      // the node it names, and that guard answers `ITEM_GONE` the moment the node is deleted — so
+      // the obvious way to check this claim cannot be used to check it, and the revocation console
+      // is the route that stays valid. Both halves are asserted, because "the listing refuses" and
+      // "the share was revoked" are separate promises and only one of them is about the share.
+      await ownerApi.expectDenied('get', `/nodes/${shareRoot.id}/shares`, 'ITEM_GONE');
 
+      const revoked = (await ownerApi.sharesOfRoom(room.room.id)).shares.find(
+        (s) => s.id === share.id,
+      );
+      expect(revoked, 'the room-wide listing still carries the share').toBeDefined();
+      expect(revoked?.revokedAt ?? null, 'the share should have been auto-revoked').not.toBeNull();
+      // Revoked means the URL is withdrawn too, not merely flagged.
+      expect(revoked?.url ?? null).toBeNull();
+
+      // Asserted on the node rather than on `/shared/:token`: that route is throttled to 10 requests
+      // a minute per IP, the whole suite shares one IP, and the viewer context above has already
+      // spent several of them resolving and refetching this very link. A test that trips the
+      // throttle reports RATE_LIMITED and tells you nothing about revocation.
       const anon = await anonymousApi(token);
-      await anon.expectDenied('get', `/shared/${token}`, 'NOT_FOUND');
+      await anon.expectDenied('get', `/nodes/${shareRoot.id}`, 'ITEM_GONE');
     } finally {
       await viewer.context.close();
     }
   });
 
   /**
-   * The same race one level up: a share whose root is deleted must be dead even where the requested
-   * node itself is still standing.
+   * The same race one level down: a descendant the link could read a second ago must stop being
+   * readable, and must say *gone* rather than *forbidden*.
+   *
+   * Deletion cascades over the subtree — `nodes.path LIKE <root prefix>` — so the descendant is
+   * deleted in the same transaction as the root it hung from. That is the first check in
+   * `PermissionService.resolve`, before any share is looked at, which is what makes `ITEM_GONE` the
+   * answer here rather than `ACCESS_REVOKED`.
    *
    * This is the cell of the permission matrix most likely to be got wrong by an implementation that
    * checks "is the node I asked for alive?" and stops there. If the join on the share root ever
    * loses its `deleted_at IS NULL`, a deleted folder keeps serving its contents to whoever holds
-   * the link, and nothing on either screen would look wrong.
+   * the link, and nothing on either screen would look wrong — so the descendant's own listing is
+   * asserted too, not only the node it hangs from.
    */
-  test('a share whose root was deleted grants nothing, even for a descendant that survives', async ({
+  test('a share whose root was deleted grants nothing anywhere in its subtree', async ({
     ownerApi,
     anonymousApi,
     scratch,
   }) => {
     const shareRoot = await ownerApi.createFolder(scratch.folder.id, 'Root To Delete');
-    const descendant = await ownerApi.createFolder(shareRoot.id, 'Survivor');
+    const descendant = await ownerApi.createFolder(shareRoot.id, 'Doomed With It');
     const share = await ownerApi.createPublicLink(shareRoot.id);
     const token = tokenFromShareUrl(share.url);
 
@@ -142,6 +169,7 @@ test.describe('flow 5 — deleted while viewing', () => {
 
     const after = await anonymousApi(token);
     await after.expectDenied('get', `/nodes/${descendant.id}`, 'ITEM_GONE');
+    await after.expectDenied('get', `/nodes/${descendant.id}/children`, 'ITEM_GONE');
   });
 
   test('an owner deleting in one tab sees the gone state in the other', async ({

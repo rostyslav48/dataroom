@@ -7,6 +7,7 @@ import {
   test,
   tokenFromShareUrl,
 } from '../support/fixtures';
+import { gotoShared } from '../support/shared-route';
 
 /**
  * FLOW 3 — share a nested folder by public link → open it in a clean browser context → the subtree
@@ -68,11 +69,13 @@ test.describe('flow 3 — public link, then revoke', () => {
       const token = tokenFromShareUrl(shares[0]!.url);
       // 256 bits of base64url. Never sequential, never derived from an id.
       expect(token.length).toBeGreaterThanOrEqual(40);
-      await expect(owner.ui.shareLinkUrl).toContainText('/s/');
+      // A readonly input carries the URL as its *value*; `toContainText` inspects text content and
+      // would pass against an empty field.
+      await expect(owner.ui.shareLinkUrl).toHaveValue(/\/s\//);
 
       // ── the clean context can read the subtree ─────────────────────────
-      await recipient.page.goto(routes.sharedEntry(token));
-      await expect(recipient.page.getByText('Reports')).toBeVisible();
+      await gotoShared(recipient.page, routes.sharedEntry(token));
+      await expect(recipient.page.getByRole('heading', { name: 'Reports' })).toBeVisible();
       await expect(recipient.ui.rowByName('Q1')).toBeVisible();
 
       // Layout comes from the response's `access`, not from the URL, so a viewer is never offered a
@@ -82,7 +85,7 @@ test.describe('flow 3 — public link, then revoke', () => {
       await expect(recipient.ui.uploadButton).toHaveCount(0);
       await expect(recipient.ui.newFolderButton).toHaveCount(0);
 
-      await recipient.ui.rowByName('Q1').click();
+      await recipient.ui.openRow('Q1').click();
       await expect(recipient.ui.rowByName('January')).toBeVisible();
 
       // ── breadcrumbs start at the share root, and stop there ────────────
@@ -98,10 +101,16 @@ test.describe('flow 3 — public link, then revoke', () => {
       await anon.expectDenied('get', `/nodes/${room.rootNodeId}`, 'FORBIDDEN');
       await anon.expectDenied('get', `/nodes/${fixtures.IDS.fileOrphan}`, 'FORBIDDEN');
       await anon.expectDenied('get', `/nodes/${scratch.folder.id}/children`, 'FORBIDDEN');
-      // Read-only means read-only: the token grants no mutation anywhere in the subtree.
-      await anon.expectDenied('patch', `/nodes/${nested.id}`, 'FORBIDDEN', { data: { name: 'Q2' } });
-      await anon.expectDenied('delete', `/nodes/${nested.id}`, 'FORBIDDEN');
-      await anon.expectDenied('post', '/folders', 'FORBIDDEN', {
+      // Read-only means read-only: the token grants no mutation anywhere in the subtree — and the
+      // refusal is UNAUTHENTICATED rather than FORBIDDEN, because a share token is not a session.
+      // Only the read routes opt into accepting one (`@AllowsShareToken`); every mutation is behind
+      // the ordinary session guard, so an anonymous holder never reaches the permission layer at
+      // all. A signed-in non-recipient attempting the same call gets FORBIDDEN — flow 4 pins that.
+      await anon.expectDenied('patch', `/nodes/${nested.id}`, 'UNAUTHENTICATED', {
+        data: { name: 'Q2' },
+      });
+      await anon.expectDenied('delete', `/nodes/${nested.id}`, 'UNAUTHENTICATED');
+      await anon.expectDenied('post', '/folders', 'UNAUTHENTICATED', {
         data: { parentId: nested.id, name: 'Injected' },
       });
 
@@ -110,7 +119,11 @@ test.describe('flow 3 — public link, then revoke', () => {
       // for a security action that might have failed is the wrong way round.
       await owner.ui.shareRevoke.click();
       await owner.ui.shareRevokeConfirm.click();
-      await expect(owner.ui.shareDialog).toContainText(/revoked/i);
+      // The URL is withdrawn from the panel, which falls back to offering a fresh one. The dialog
+      // does not use the word "revoked" — the shipped copy is "There is no active link for this
+      // item" — so the assertion is that the live link is gone, not that a particular word appears.
+      await expect(owner.ui.shareLinkUrl).toHaveCount(0);
+      await expect(owner.ui.shareDialog).toContainText(/no active link for this item/i);
 
       const afterRevoke = (await ownerApi.sharesOf(shareRoot.id)).shares[0]!;
       expect(afterRevoke.revokedAt).not.toBeNull();
@@ -121,7 +134,10 @@ test.describe('flow 3 — public link, then revoke', () => {
       const anonAfter = await anonymousApi(token);
       await anonAfter.expectDenied('get', `/nodes/${nested.id}`, 'ACCESS_REVOKED');
       await anonAfter.expectDenied('get', `/nodes/${shareRoot.id}`, 'ACCESS_REVOKED');
-      await anonAfter.expectDenied('get', `/shared/${token}`, 'NOT_FOUND');
+      // ACCESS_REVOKED, not NOT_FOUND. The token still resolves to a share row — it is the share
+      // that was turned off — and telling a holder "this link was revoked" is a different sentence
+      // from "no such link", which is what the frontend renders two different screens for.
+      await anonAfter.expectDenied('get', `/shared/${token}`, 'ACCESS_REVOKED');
 
       await recipient.page.reload();
       await expect(recipient.ui.state.accessRevoked).toBeVisible();

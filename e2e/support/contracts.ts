@@ -20,6 +20,7 @@ const contracts = createRequire(import.meta.url)('@dataroom/contracts') as typeo
 
 export const {
   API_BASE,
+  ERROR_STATUS,
   SHARE_TOKEN_HEADER,
   endpoints,
   fixtures,

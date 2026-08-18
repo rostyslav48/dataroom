@@ -36,7 +36,11 @@ test.describe('flow 4 — permissioned share to a second account', () => {
       await owner.ui.shareButton.click();
       await owner.ui.sharePeopleTab.click();
       await owner.ui.recipientEmailInput.fill(fixtures.users.viewer.email);
+      // Enter only queues the address as a chip — nothing is shared until Invite is pressed. That
+      // ordering is deliberate in the UI (a typo should not mint a grant) and the spec has to
+      // honour it, or it asserts against a share that was never created.
       await owner.ui.recipientEmailInput.press('Enter');
+      await owner.ui.inviteSubmit.click();
       await expect(owner.ui.recipientRow(fixtures.users.viewer.email)).toBeVisible();
 
       const share = (await ownerApi.sharesOf(shareRoot.id)).shares.find(
@@ -77,9 +81,13 @@ test.describe('flow 4 — permissioned share to a second account', () => {
       expect(rooms.owned.map((r) => r.id)).not.toContain(room.room.id);
 
       // ── the owner revokes ──────────────────────────────────────────────
-      await owner.ui.shareRevoke.click();
-      await owner.ui.shareRevokeConfirm.click();
-      await expect(owner.ui.shareDialog).toContainText(/revoked/i);
+      // Per *recipient*, because that is the only revocation the People tab offers: a permissioned
+      // share has no "stop sharing entirely" control, only "Remove access for <address>". Removing
+      // the sole recipient is therefore how a permissioned share is turned off from the UI, and it
+      // is two clicks — the button swaps itself for a confirmation rather than firing on the first.
+      await owner.ui.recipientRemove(fixtures.users.viewer.email).click();
+      await owner.ui.recipientRemoveConfirm.click();
+      await expect(owner.ui.recipientRow(fixtures.users.viewer.email)).toContainText(/revoked/i);
 
       // Nothing is cached anywhere, so this takes effect on the very next request — and it says
       // *revoked*, not a bare forbidden, because the recipient needs to know what changed.
