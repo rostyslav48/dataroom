@@ -291,9 +291,113 @@ describe('uploads — complete and retry', () => {
       expect(await rollup(seeded.q3Id)).toEqual(await recomputedRollup(seeded.q3Id));
     });
 
+    it('refuses a zero-byte declaration when no object was written at all', async () => {
+      const reserved = await reserve({ name: 'empty.txt', sizeBytes: 0, mimeType: 'text/plain' });
+      // The one case where "does the object exist?" is the only defence. For any non-zero
+      // declaration the size check catches a missing object anyway, because `stat` reports 0 — so
+      // without this test the existence branch could be deleted and the suite would stay green.
+      const response = await complete(reserved.versionId);
+
+      expect(response.status).toBe(409);
+      expect(ApiError.parse(response.body).code).toBe('UPLOAD_INCOMPLETE');
+      expect((await versionRow(reserved.versionId)).status).toBe('pending');
+    });
+
+    it('applies the rollup once when several completes land together', async () => {
+      const reserved = await reserve({ sizeBytes: 4096 });
+      harness.storage.putObject(reserved.storageKey, 4096);
+
+      // Every one of these reads `pending` before any of them writes. The `status = 'ready'` check
+      // at the top of `complete` cannot separate them, because `stat()` is a network round trip in
+      // between — so the promotion has to be what serialises, not the read.
+      const responses = await Promise.all(
+        Array.from({ length: 6 }, () => complete(reserved.versionId)),
+      );
+      expect(responses.map((response) => response.status)).toEqual([200, 200, 200, 200, 200, 200]);
+
+      expect(await rollup(seeded.q3Id)).toEqual(await recomputedRollup(seeded.q3Id));
+      expect(await rollup(seeded.financialsId)).toEqual(
+        await recomputedRollup(seeded.financialsId),
+      );
+      expect(await rollup(seeded.rootNodeId)).toEqual(await recomputedRollup(seeded.rootNodeId));
+    });
+
     it('404s on a version that never existed', async () => {
       const response = await complete('00000000-0000-4000-8000-0000000009ff');
       expect(response.status).toBe(404);
+    });
+  });
+
+  /**
+   * The controller claims an upload cannot be completed or retried by anyone but the owner of the
+   * folder it was reserved in. That claim rests on `@Resource('version', 'versionId')` resolving a
+   * version back to its node — one decorator away from being wrong, and nothing else in the suite
+   * covers the `version` resource kind.
+   */
+  describe('who may finish an upload', () => {
+    const as = async (
+      path: string,
+      versionId: string,
+      user: { id: string; email: string },
+    ): Promise<request.Response> =>
+      request(httpServer(harness))
+        .post(versionPath(path, versionId))
+        .set(await harness.authHeader(user))
+        .send();
+
+    it('denies a viewer completing an upload inside a folder shared with them', async () => {
+      const reserved = await reserve();
+      harness.storage.putObject(reserved.storageKey, 4096);
+      const viewer = { id: seeded.viewerId, email: fixtures.users.viewer.email };
+
+      // Q3 is inside the folder the fixture share grants, so the viewer can *read* this node. The
+      // denial has to come from the role, not from not finding it.
+      const response = await as(endpoints.uploads.complete.path, reserved.versionId, viewer);
+      expect(response.status).toBe(403);
+      expect(ApiError.parse(response.body).code).toBe('FORBIDDEN');
+      expect((await versionRow(reserved.versionId)).status).toBe('pending');
+    });
+
+    it('denies a viewer retrying an upload', async () => {
+      const reserved = await reserve();
+      const viewer = { id: seeded.viewerId, email: fixtures.users.viewer.email };
+
+      const response = await as(endpoints.uploads.retry.path, reserved.versionId, viewer);
+      expect(response.status).toBe(403);
+      // Above all: no URL was minted for them. Only `init`'s own is on the record.
+      expect(harness.storage.minted.filter((entry) => entry.kind === 'upload')).toHaveLength(1);
+    });
+
+    it('tells a stranger no more about a version than about the node it belongs to', async () => {
+      const reserved = await reserve();
+      harness.storage.putObject(reserved.storageKey, 4096);
+      const stranger = { id: seeded.strangerId, email: fixtures.users.stranger.email };
+
+      // The baseline: what this stranger already gets for the node itself. Whatever the permission
+      // matrix decides that should be, the version routes must not be more revealing — resolving a
+      // version to its node is the whole mechanism, so a divergence here means it was bypassed.
+      const onNode = await request(httpServer(harness))
+        .get(`${API_BASE}${endpoints.nodes.get.path.replace(':id', reserved.nodeId)}`)
+        .set(await harness.authHeader(stranger));
+      expect(onNode.status).not.toBe(200);
+
+      for (const path of [endpoints.uploads.complete.path, endpoints.uploads.retry.path]) {
+        const response = await as(path, reserved.versionId, stranger);
+        expect(response.status, path).toBe(onNode.status);
+        expect(ApiError.parse(response.body).code, path).toBe(ApiError.parse(onNode.body).code);
+      }
+
+      expect((await versionRow(reserved.versionId)).status).toBe('pending');
+      expect(harness.storage.minted.filter((entry) => entry.kind === 'upload')).toHaveLength(1);
+    });
+
+    it('refuses an unauthenticated caller', async () => {
+      const reserved = await reserve();
+
+      const response = await request(httpServer(harness))
+        .post(versionPath(endpoints.uploads.complete.path, reserved.versionId))
+        .send();
+      expect(response.status).toBe(401);
     });
   });
 

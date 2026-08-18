@@ -54,11 +54,22 @@ export class FakeStorageService implements StorageService {
     });
   }
 
-  stat(key: string): Promise<StoredObject> {
+  /**
+   * Deliberately yields the event loop before answering.
+   *
+   * `stat` is the one call in the upload lifecycle that sits *between* reading a version's status
+   * and writing it, and against Supabase it is a network round trip. A `Promise.resolve` here
+   * settles on the microtask queue, so concurrent requests never interleave across it and the
+   * suite cannot see any race that window opens — a `complete` that double-counts its rollup under
+   * two simultaneous callers passed cleanly until this became a macrotask.
+   *
+   * A fake that is faster than the real thing is not a neutral simplification; it hides exactly
+   * the class of bug that only appears under load.
+   */
+  async stat(key: string): Promise<StoredObject> {
+    await new Promise((resolve) => setTimeout(resolve, 1));
     const size = this.objects.get(key);
-    return Promise.resolve(
-      size === undefined ? { exists: false, sizeBytes: 0 } : { exists: true, sizeBytes: size },
-    );
+    return size === undefined ? { exists: false, sizeBytes: 0 } : { exists: true, sizeBytes: size };
   }
 
   delete(key: string): Promise<void> {

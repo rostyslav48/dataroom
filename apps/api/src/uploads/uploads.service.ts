@@ -6,13 +6,12 @@ import {
   ALLOWED_MIME_TYPES,
   type CompleteUploadResponse,
   type InitUploadResponse,
-  type NodeDto,
   type RetryUploadResponse,
 } from '@dataroom/contracts';
 import { errors } from '../common/domain-error';
 import { AppConfig } from '../config/app.config';
-import { selectRows } from '../database/sql';
-import { NODE_COLUMNS, toNodeDto, type NodeRow } from '../nodes/node.row';
+import { selectRows, updateCount } from '../database/sql';
+import { toNodeDto, type NodeRow } from '../nodes/node.row';
 import { NodesService } from '../nodes/nodes.service';
 import { nextAvailableName } from '../nodes/name-conflict.util';
 import { ancestorIds, buildPath, depthOf } from '../nodes/path.util';
@@ -44,8 +43,15 @@ interface VersionRow {
   currentVersionId: string | null;
 }
 
-/** How many suffixes to try when two uploads race for the same name before giving up. */
-const NAME_RACE_ATTEMPTS = 5;
+/**
+ * How many suffixes to try when uploads race for the same name before giving up.
+ *
+ * Sized against the case SPEC-04 is actually about — a multi-file drop where every file is called
+ * the same thing. Each losing attempt learns exactly one name, so N racing callers need up to N
+ * attempts; a bound of 5 turned an 8-file drop into three spurious 409s. `nextAvailableName`
+ * allows 100 suffixes for the same reason, and this is the bound users hit first.
+ */
+const NAME_RACE_ATTEMPTS = 100;
 
 const isUniqueViolation = (error: unknown): boolean =>
   error instanceof QueryFailedError &&
@@ -139,16 +145,25 @@ export class UploadsService {
       );
     });
 
-    const { url, expiresAt } = await this.storage.createSignedUploadUrl(
-      storageKey,
-      WRITE_URL_TTL_SECONDS,
-    );
+    let signed: SignedUrl;
+    try {
+      signed = await this.storage.createSignedUploadUrl(storageKey, WRITE_URL_TTL_SECONDS);
+    } catch (error) {
+      // The rows are committed but the client never learns the `versionId`, so it can neither
+      // `retry` nor `abort` — it would be left with an invisible reservation holding a name it
+      // cannot release. The sweeper would eventually collect it, 24 hours later.
+      await this.dataSource.transaction(async (manager) => {
+        await manager.query(`DELETE FROM file_versions WHERE id = $1`, [versionId]);
+        await manager.query(`DELETE FROM nodes WHERE id = $1`, [nodeId]);
+      });
+      throw error;
+    }
 
     return {
       nodeId,
       versionId,
-      uploadUrl: url,
-      uploadExpiresAt: expiresAt.toISOString(),
+      uploadUrl: signed.url,
+      uploadExpiresAt: signed.expiresAt.toISOString(),
       // Returned even when unchanged, so the client can compare and surface a silent rename.
       finalName,
     };
@@ -182,18 +197,32 @@ export class UploadsService {
     }
 
     const node = await this.dataSource.transaction(async (manager) => {
-      await manager.query(
-        `UPDATE file_versions SET status = 'ready', size_bytes = $2 WHERE id = $1`,
+      // `WHERE status = 'pending'` is what makes the promotion happen at most once, and the row
+      // count is what tells us whether *this* call is the one that did it.
+      //
+      // The `status === 'ready'` check above cannot carry that on its own: it reads, then `stat()`
+      // goes out over the network, and only then does this transaction open. Two clients retrying
+      // `complete` across that window both read `pending` and both reach here, and because the
+      // rollup update is `x = x + $n`, row locks serialise the two writes without merging them —
+      // so both deltas land and every ancestor is permanently overcounted. Silent, and only ever
+      // discovered by the reconciliation job.
+      const promoted = await updateCount(
+        manager,
+        `UPDATE file_versions SET status = 'ready', size_bytes = $2
+          WHERE id = $1 AND status = 'pending'`,
         [versionId, object.sizeBytes],
       );
-      await manager.query(
-        `UPDATE nodes
-            SET current_version_id = $2, size_bytes = $3, mime_type = $4, updated_at = now()
-          WHERE id = $1`,
-        [version.nodeId, versionId, object.sizeBytes, version.mimeType],
-      );
 
-      await this.nodes.adjustRollups(manager, ancestorIds(version.nodePath), object.sizeBytes, 1);
+      if (promoted === 1) {
+        await manager.query(
+          `UPDATE nodes
+              SET current_version_id = $2, size_bytes = $3, mime_type = $4, updated_at = now()
+            WHERE id = $1`,
+          [version.nodeId, versionId, object.sizeBytes, version.mimeType],
+        );
+        await this.nodes.adjustRollups(manager, ancestorIds(version.nodePath), object.sizeBytes, 1);
+      }
+
       return this.nodes.requireRow(version.nodeId, manager);
     });
 
@@ -240,7 +269,20 @@ export class UploadsService {
       ]);
     });
 
-    await this.storage.delete(version.storageKey);
+    await this.deleteObjectBestEffort(version.storageKey);
+  }
+
+  /**
+   * Storage failures must not turn a successful cancel into a 500. The rows are already gone by the
+   * time this runs, so the client's request genuinely succeeded; the orphaned object is the
+   * sweeper's problem, which is exactly the division of labour SPEC-04 describes.
+   */
+  private async deleteObjectBestEffort(storageKey: string): Promise<void> {
+    try {
+      await this.storage.delete(storageKey);
+    } catch (error) {
+      this.logger.warn({ err: error, storageKey }, 'Could not delete abandoned object');
+    }
   }
 
   /**
@@ -327,14 +369,6 @@ export class UploadsService {
         nodeId,
       ]);
     });
-    await this.storage.delete(storageKey);
+    await this.deleteObjectBestEffort(storageKey);
   }
-
-  /** Used by the content controller's tests to assert the node was resolvable at all. */
-  async nodeDtoFor(nodeId: string): Promise<NodeDto> {
-    return toNodeDto(await this.nodes.requireRow(nodeId));
-  }
-
-  /** `NODE_COLUMNS` is re-exported so the uploads tests can build the same projection. */
-  static readonly NODE_COLUMNS = NODE_COLUMNS;
 }

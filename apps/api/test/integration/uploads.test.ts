@@ -269,14 +269,18 @@ describe('uploads — init and abort', () => {
       expect(await childNames(seeded.legalId)).toEqual(['NDA.pdf', 'race (2).pdf', 'race.pdf']);
     });
 
-    it('survives four callers racing for one name', async () => {
+    it('survives a whole multi-file drop landing on one name', async () => {
+      // Eight, because the retry bound used to be five and four callers passed. The case SPEC-04
+      // is actually about is a drag-and-drop of many identically named files, so the bound has to
+      // clear the burst rather than sit just above the test.
       const responses = await Promise.all(
-        Array.from({ length: 4 }, () => init(pdf({ name: 'burst.pdf' }))),
+        Array.from({ length: 8 }, () => init(pdf({ name: 'burst.pdf' }))),
       );
 
-      expect(responses.map((response) => response.status)).toEqual([201, 201, 201, 201]);
+      expect(responses.map((response) => response.status)).toEqual(Array(8).fill(201));
       const names = responses.map((response) => InitUploadResponse.parse(response.body).finalName);
-      expect(new Set(names).size).toBe(4);
+      expect(new Set(names).size).toBe(8);
+      expect(await childNames(seeded.legalId)).toHaveLength(9);
     });
   });
 
