@@ -16,8 +16,9 @@ src/
   permissions/  PermissionService, ReadAccessGuard, OwnerGuard, @Resource()   ← the security boundary
   nodes/        path.util, name-conflict.util, NodesService, controller
   data-rooms/   service + controller
-  storage/      StorageService interface + Supabase implementation
-  uploads/      (in progress — see ../../ProjectPlan/STATUS.md)
+  storage/      StorageService interface + Supabase implementation + sanitizeFilename
+  uploads/      init/complete/retry/abort, the content and download redirects, and the sweeper
+  shares/       (not built yet — BE-16a…d; see ../../ProjectPlan/STATUS.md)
 ```
 
 ## Rules with teeth
@@ -76,6 +77,10 @@ projection; keep the `NODE_COLUMNS` fragment as the single source of the node pr
 `test/unit/**` pure logic · `test/integration/**` real HTTP against real Postgres · `src/**/*.test.ts`
 for pure modules that live next to their code.
 
+Run `pnpm test` from the repo root, not `pnpm --filter @dataroom/api test`: the root script is the
+gated command CI runs. A bare `vitest run` skips the coverage thresholds, and a threshold nobody
+runs locally is a threshold that fails in CI instead.
+
 ```ts
 const harness = await createTestHarness();     // real AppModule, real DB, real middleware stack
 await resetDatabase(harness.dataSource);
@@ -98,3 +103,12 @@ The permission matrix (`test/integration/permission-matrix.test.ts`) is the high
 It asserts **exact** `Access` values with `toEqual`, not `toMatchObject` — a subset match lets a
 stray field ride along, which is the class of bug it exists to catch. Extend it whenever you touch
 `permissions/`.
+
+## Two traps this wave added
+
+- **A `@Redirect()` handler is still a handler.** Guards run to completion before its body, which is
+  what makes "access decided before a URL is minted" true rather than hopeful. Assert it against the
+  fake store's mint record; a test that only reads the status code passes either way.
+- **Deleting a `ready` `file_versions` row violates the FK from `nodes.current_version_id`.** So a
+  sweeper with a wrong filter throws, gets caught, changes nothing, and reports zero — identical to
+  a correct sweep from the outside. Assert on what a query *selects*, not only on what changed.
