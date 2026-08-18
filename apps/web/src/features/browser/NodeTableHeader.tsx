@@ -7,10 +7,14 @@ export interface NodeTableHeaderProps {
   onSortChange: (sort: NodeSortField, dir: 'asc' | 'desc') => void;
 }
 
+/**
+ * Below `md` the rows collapse to a list, so the two numeric columns lose their headings with
+ * them. Sorting stays reachable there: the Name heading is still a button, and it cycles.
+ */
 const COLUMNS: { field: NodeSortField; label: string; className: string }[] = [
   { field: 'name', label: 'Name', className: 'min-w-0' },
-  { field: 'size', label: 'Size', className: 'hidden sm:block' },
-  { field: 'updatedAt', label: 'Modified', className: 'hidden sm:block' },
+  { field: 'size', label: 'Size', className: 'hidden md:block' },
+  { field: 'updatedAt', label: 'Modified', className: 'hidden md:block' },
 ];
 
 /**
@@ -22,7 +26,7 @@ export function NodeTableHeader({ sort, dir, onSortChange }: NodeTableHeaderProp
   return (
     <div
       role="row"
-      className="grid h-9 grid-cols-[minmax(0,1fr)_6rem_7rem_2.5rem] items-center gap-3 border-b border-line bg-surface-muted px-3 text-xs font-semibold uppercase tracking-wide text-ink-subtle sm:grid-cols-[minmax(0,1fr)_7rem_8rem_2.5rem]"
+      className="grid h-9 grid-cols-[minmax(0,1fr)_2.5rem] items-center gap-3 border-b border-line bg-surface-muted px-3 text-xs font-semibold uppercase tracking-wide text-ink-subtle md:grid-cols-[minmax(0,1fr)_7rem_8rem_2.5rem]"
     >
       {COLUMNS.map((column) => {
         const isActive = sort === column.field;

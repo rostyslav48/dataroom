@@ -9,6 +9,8 @@ export interface NodeNameCellProps {
   /** Inline message under the input, used for NAME_CONFLICT — a toast would lose the typing. */
   renameError?: string | null | undefined;
   renameBusy?: boolean | undefined;
+  /** -1 for rows outside the roving tab order; the grid's arrow keys reach them instead. */
+  tabIndex?: number | undefined;
   onOpen: () => void;
   onRenameCommit: (name: string) => void;
   onRenameCancel: () => void;
@@ -24,6 +26,7 @@ export function NodeNameCell({
   isRenaming,
   renameError,
   renameBusy = false,
+  tabIndex,
   onOpen,
   onRenameCommit,
   onRenameCancel,
@@ -102,7 +105,8 @@ export function NodeNameCell({
     <button
       type="button"
       onClick={onOpen}
-      className="flex min-w-0 items-center gap-2 text-left text-ink hover:underline"
+      {...(tabIndex === undefined ? {} : { tabIndex })}
+      className="flex min-w-0 items-center gap-2 rounded text-left text-ink hover:underline"
     >
       <NodeIcon node={node} />
       <span className="truncate">{node.name}</span>

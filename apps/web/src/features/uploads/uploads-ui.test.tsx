@@ -5,6 +5,7 @@ import { fixtures, type UploadQueueItem } from '@dataroom/contracts';
 import { useMockApi } from '@/test/msw';
 import { renderWithProviders } from '@/test/harness';
 import { FakeXhr, installFakeXhr, restoreXhr } from '@/test/fakeXhr';
+import { Toaster, useToastStore } from '@/components/ui/Toast';
 import { DropZoneOverlay } from './DropZoneOverlay';
 import { UploadQueuePanel } from './UploadQueuePanel';
 import { UploadItem } from './UploadItem';
@@ -49,6 +50,7 @@ beforeEach(() => {
   installFakeXhr();
   store().reset();
   store().setInvalidator(null);
+  useToastStore.getState().clear();
 });
 
 afterEach(() => {
@@ -278,6 +280,57 @@ describe('UploadQueuePanel', () => {
     const whenIdle = new Event('beforeunload', { cancelable: true });
     window.dispatchEvent(whenIdle);
     expect(whenIdle.defaultPrevented).toBe(false);
+  });
+
+  it('announces completion politely, since the queue is a corner widget nobody is watching', async () => {
+    renderWithProviders(<UploadQueuePanel />);
+    store().enqueue([pdf('a.pdf')], IDS.rootNode);
+    await waitFor(() => {
+      expect(FakeXhr.instances).toHaveLength(1);
+    });
+    FakeXhr.last().succeed();
+
+    const region = await screen.findByTestId('upload-announcement');
+    await waitFor(() => {
+      expect(region).toHaveTextContent('1 file uploaded');
+    });
+    expect(region).toHaveAttribute('aria-live', 'polite');
+  });
+
+  it('toasts the finished upload — a success that happened away from the user’s attention', async () => {
+    renderWithProviders(
+      <>
+        <UploadQueuePanel />
+        <Toaster />
+      </>,
+    );
+    store().enqueue([pdf('a.pdf'), pdf('b.pdf')], IDS.rootNode);
+    await waitFor(() => {
+      expect(FakeXhr.instances).toHaveLength(2);
+    });
+    FakeXhr.instances.forEach((xhr) => {
+      xhr.succeed();
+    });
+
+    expect(await screen.findByText('2 files uploaded')).toBeInTheDocument();
+  });
+
+  it('never toasts a failure: it stays in the row that owns the retry', async () => {
+    renderWithProviders(
+      <>
+        <UploadQueuePanel />
+        <Toaster />
+      </>,
+    );
+    store().enqueue([pdf('a.pdf')], IDS.rootNode);
+    await waitFor(() => {
+      expect(FakeXhr.instances).toHaveLength(1);
+    });
+    FakeXhr.last().fail();
+
+    await screen.findByRole('alert');
+    expect(useToastStore.getState().toasts).toHaveLength(0);
+    expect(await screen.findByTestId('upload-announcement')).toHaveTextContent('0 files uploaded, 1 failed');
   });
 
   it('closes the panel and drops the queue when dismissed', async () => {

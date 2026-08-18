@@ -17,9 +17,11 @@ export interface NodeActions {
 export interface NodeActionsMenuProps {
   node: NodeListItem;
   actions: NodeActions;
+  /** -1 outside the row that holds the roving tab stop, so Tab crosses the list once, not per row. */
+  tabIndex?: number | undefined;
 }
 
-export function NodeActionsMenu({ node, actions }: NodeActionsMenuProps): JSX.Element | null {
+export function NodeActionsMenu({ node, actions, tabIndex }: NodeActionsMenuProps): JSX.Element | null {
   const items: MenuItemSpec[] = [];
   const { onRename, onMove, onShare, onDownload, onDelete } = actions;
 
@@ -87,6 +89,7 @@ export function NodeActionsMenu({ node, actions }: NodeActionsMenuProps): JSX.El
         <button
           type="button"
           aria-label={`Actions for ${node.name}`}
+          {...(tabIndex === undefined ? {} : { tabIndex })}
           className="rounded p-1 text-ink-subtle hover:bg-surface-sunken hover:text-ink"
         >
           <MoreHorizontal aria-hidden="true" className="h-4 w-4" />

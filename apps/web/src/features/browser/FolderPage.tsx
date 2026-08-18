@@ -3,6 +3,7 @@ import { useNavigate } from 'react-router-dom';
 import { ResourceName, type NodeListItem, type NodeSortField } from '@dataroom/contracts';
 import { isApiClientError } from '@/lib/api';
 import { errorMap, presentError } from '@/lib/errorMap';
+import { toastSuccess } from '@/components/ui/Toast';
 import { Breadcrumbs } from './Breadcrumbs';
 import { FolderToolbar } from './FolderToolbar';
 import { LoadMoreSentinel } from './LoadMoreSentinel';
@@ -191,6 +192,9 @@ export function FolderPage({ nodeId, context }: FolderPageProps): JSX.Element {
           type="file"
           multiple
           aria-label="Choose files to upload"
+          // Out of the tab order deliberately: it is invisible, so a keyboard user would be
+          // stopped on a control they cannot see. The visible Upload button opens it.
+          tabIndex={-1}
           className="sr-only"
           onChange={(event) => {
             const chosen = Array.from(event.target.files ?? []);
@@ -276,6 +280,11 @@ export function FolderPage({ nodeId, context }: FolderPageProps): JSX.Element {
               if (!next) setMoveTarget(null);
             }}
             node={moveTarget}
+            // A move lands somewhere the user is not looking, so its success is announced rather
+            // than merely implied by a row leaving the list.
+            onMoved={(moved) => {
+              toastSuccess(`Moved “${moved.name}”`);
+            }}
             parentId={nodeId}
             rootId={detail.data.shareRootId}
             rootName={detail.data.breadcrumbs[0]?.name ?? detail.data.dataRoomName}

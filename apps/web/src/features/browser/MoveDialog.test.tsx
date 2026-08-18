@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { beforeEach, describe, expect, it } from 'vitest';
 import { screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { fixtures } from '@dataroom/contracts';
@@ -6,10 +6,15 @@ import { useMockApi } from '@/test/msw';
 import { renderWithProviders } from '@/test/harness';
 import { childrenOf, getNode } from '@/mocks/db';
 import { forceError } from '@/mocks/errorMode';
+import { Toaster, useToastStore } from '@/components/ui/Toast';
 import { FolderPage } from './FolderPage';
 import { disabledReasonFor } from './FolderTreePicker';
 
 useMockApi();
+
+beforeEach(() => {
+  useToastStore.getState().clear();
+});
 
 const { IDS } = fixtures;
 const roomContext = { kind: 'room', roomId: IDS.room } as const;
@@ -107,6 +112,43 @@ describe('MoveDialog', () => {
       expect(getNode(IDS.folderFin)?.parentId).toBe(IDS.folderLegal);
     });
     expect(screen.queryByRole('button', { name: 'Financials' })).not.toBeInTheDocument();
+  });
+
+  it('toasts the move, because the item lands somewhere the user cannot see', async () => {
+    renderWithProviders(
+      <>
+        <FolderPage nodeId={IDS.rootNode} context={roomContext} />
+        <Toaster />
+      </>,
+      { route: `/rooms/${IDS.room}/f/${IDS.rootNode}` },
+    );
+    await openMoveFor('Financials');
+
+    const tree = screen.getByRole('tree', { name: 'Choose a destination folder' });
+    await userEvent.click(await within(tree).findByRole('button', { name: 'Legal' }));
+    await userEvent.click(screen.getByRole('button', { name: 'Move here' }));
+
+    expect(await screen.findByText('Moved “Financials”')).toBeInTheDocument();
+  });
+
+  it('never toasts a rejected move: the reason belongs beside the picker', async () => {
+    renderWithProviders(
+      <>
+        <FolderPage nodeId={IDS.rootNode} context={roomContext} />
+        <Toaster />
+      </>,
+      { route: `/rooms/${IDS.room}/f/${IDS.rootNode}` },
+    );
+    await openMoveFor('Financials');
+
+    const tree = screen.getByRole('tree', { name: 'Choose a destination folder' });
+    await userEvent.click(await within(tree).findByRole('button', { name: 'Legal' }));
+    forceError('INTERNAL', { endpointKey: 'nodes.move', times: 2 });
+    await userEvent.click(screen.getByRole('button', { name: 'Move here' }));
+
+    expect(await screen.findByRole('alert')).toBeInTheDocument();
+    expect(useToastStore.getState().toasts).toHaveLength(0);
+    expect(screen.getByTestId('toast-region').textContent).toBe('');
   });
 
   it('explains a name clash at the destination and leaves the tree untouched', async () => {

@@ -137,6 +137,38 @@ describe('NodeTable', () => {
   });
 });
 
+describe('NodeTable at tablet width and below', () => {
+  /**
+   * The table collapses to a list rather than dropping columns: size and modified move onto a
+   * second line under the name and become columns again from `md` up. Asserted on the layout
+   * classes because jsdom has no viewport — but the point being defended is that no value is
+   * thrown away when the viewport narrows, which the DOM assertions below do check directly.
+   */
+  it('moves size and modified under the name instead of hiding them', () => {
+    setup();
+    const row = screen.getByTestId(`node-row-${file.id}`);
+    const [, size, updated] = within(row).getAllByRole('gridcell');
+
+    expect(size?.className).toContain('row-start-2');
+    expect(size?.className).toContain('md:row-start-1');
+    expect(updated?.className).toContain('row-start-2');
+    expect(updated?.className).toContain('md:row-start-1');
+
+    // Still rendered, still one of each: the collapse is a layout change, not a data loss.
+    expect(within(row).getByText('512 KB')).toBeInTheDocument();
+    expect(within(row).getByText('15 Jan 2026')).toBeInTheDocument();
+  });
+
+  it('keeps the name column heading, and with it sorting, when the numeric headings go', () => {
+    setup();
+    const [name, size, updated] = screen.getAllByRole('columnheader');
+
+    expect(name?.className).not.toContain('hidden');
+    expect(size?.className).toContain('hidden md:block');
+    expect(updated?.className).toContain('hidden md:block');
+  });
+});
+
 function renameProps(overrides: Partial<RenameController> = {}): { rename: RenameController } {
   return {
     rename: {

@@ -4,6 +4,7 @@ import { useQueryClient } from '@tanstack/react-query';
 import { useAuth } from '@/features/auth/useAuth';
 import { useRooms } from '@/features/rooms/useRooms';
 import { UploadQueuePanel } from '@/features/uploads/UploadQueuePanel';
+import { Toaster } from '@/components/ui/Toast';
 import { useUploadStore } from '@/features/uploads/uploadStore';
 import { childrenKeyPrefix, qk, statsKeyPrefix } from '@/lib/queryKeys';
 import { TopBar } from './TopBar';
@@ -66,6 +67,7 @@ export function AppShell(): JSX.Element {
         </main>
       </div>
       <UploadQueuePanel />
+      <Toaster />
     </div>
   );
 }

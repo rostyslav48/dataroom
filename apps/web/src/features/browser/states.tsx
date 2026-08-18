@@ -15,8 +15,8 @@ export function SkeletonRows({ rows = 6 }: SkeletonRowsProps): JSX.Element {
         <div key={index} className="flex h-11 items-center gap-3 px-3">
           <Skeleton className="h-4 w-4 rounded" />
           <Skeleton className="h-4 flex-1" />
-          <Skeleton className="hidden h-4 w-16 sm:block" />
-          <Skeleton className="hidden h-4 w-24 sm:block" />
+          <Skeleton className="hidden h-4 w-16 md:block" />
+          <Skeleton className="hidden h-4 w-24 md:block" />
         </div>
       ))}
     </div>
