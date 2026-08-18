@@ -27,7 +27,7 @@ const TRACKS = {
   backend: ['apps/api/**'],
   frontend: ['apps/web/**'],
   qa: ['e2e/**'],
-  pm: ['README.md', '.claude/**', 'ProjectPlan/**'],
+  pm: ['README.md', 'CLAUDE.md', '.claude/**', 'ProjectPlan/**'],
   w0: [
     'package.json',
     'pnpm-workspace.yaml',
@@ -42,6 +42,7 @@ const TRACKS = {
     'docker-compose.yml',
     '.env.example',
     'README.md',
+    'CLAUDE.md',
     '.claude/**',
     'packages/contracts/**',
     'apps/api/**',
