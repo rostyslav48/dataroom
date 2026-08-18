@@ -228,6 +228,25 @@ describe('access failure screens', () => {
     });
   });
 
+  it('names only the signed-in address when the server withholds the invited one', async () => {
+    // The production path: the API deliberately does not disclose who a share was sent to, so the
+    // screen has to be useful — and still offer the switch — knowing only one of the two addresses.
+    renderWithProviders(
+      <AccessErrorScreen
+        error={new ApiClientError('WRONG_ACCOUNT', 'nope', { status: 403 })}
+        context={roomContext}
+      />,
+      { route: `/rooms/${IDS.room}/f/${IDS.folderFin}`, withAuth: true },
+    );
+
+    expect(
+      await screen.findByText(
+        `This was shared with another email address. You're signed in as ${fixtures.users.owner.email}.`,
+      ),
+    ).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Switch account' })).toBeInTheDocument();
+  });
+
   it('falls back to a generic state for an unexpected failure', () => {
     renderWithProviders(
       <AccessErrorScreen
