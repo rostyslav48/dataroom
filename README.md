@@ -110,7 +110,7 @@ example `corepack pnpm install --frozen-lockfile`.
 This is the fastest way to inspect the complete UI and its mutable fixture tree:
 
 ```bash
-pnpm --filter @dataroom/web exec msw init public/
+pnpm --filter @dataroom/web exec msw init public/ --no-save
 VITE_USE_MSW=true pnpm dev:web
 ```
 

@@ -22,14 +22,14 @@ a worktree'd agent loses its own instructions. Everyone shares this one checkout
 
 ## Ownership — enforced per commit, not by convention
 
-| Path | Owner |
-|---|---|
-| `apps/api/**` | backend |
-| `apps/web/**` | frontend |
-| `e2e/**` | qa |
-| `packages/contracts/**` | **frozen** — CCP only |
+| Path                                    | Owner                    |
+| --------------------------------------- | ------------------------ |
+| `apps/api/**`                           | backend                  |
+| `apps/web/**`                           | frontend                 |
+| `e2e/**`                                | qa                       |
+| `packages/contracts/**`                 | **frozen** — CCP only    |
 | root config, `.github/**`, `scripts/**` | W0 — frozen after Wave 0 |
-| `README.md`, `CLAUDE.md`, `.claude/**` | PM |
+| `README.md`, `CLAUDE.md`, `.claude/**`  | PM                       |
 
 Every commit declares its track in a trailer, and CI validates the commit's files against that
 track's globs:
@@ -52,7 +52,7 @@ with `node scripts/check-ownership.mjs main..HEAD`.
 Wave 0, and is **frozen**. Both apps import it constantly and write to it never.
 
 To change it: stop, write `../ProjectPlan/ccp/CCP-<n>-<slug>.md` from `TEMPLATE.md`, apply the
-change in a single commit touching only that package, and tell the other track *why*, not just
+change in a single commit touching only that package, and tell the other track _why_, not just
 what. Six such notes exist; read them before assuming a divergence from the plan is an accident.
 
 Responses the contract leaves implied are recorded in `apps/api/RESPONSE-SHAPES.md`, including two
@@ -81,7 +81,7 @@ pnpm lint && pnpm typecheck
 > the ungated suites while CI ran the gated ones, and the 90% service threshold quietly stopped
 > being a threshold. `test:fast` exists for the inner loop and is named so it cannot be mistaken
 > for the gate. Gates: 90% statements on `*.service.ts` and on `permissions/**`, 80% everywhere
-> else. Currently ~692 tests, all green.
+> else. Currently 762 tests (13 contracts, 413 API, 336 web), all green.
 
 ## Non-negotiables
 
@@ -113,8 +113,12 @@ empty, error and success tests · no stub presented as finished · committed wit
 
 - **`localhost` resolves to `::1` first.** When a published sandbox port "can't be reached", try
   `http://127.0.0.1:<port>` before debugging anything else.
-- **MSW's worker is generated, not committed.** `pnpm --filter @dataroom/web exec msw init public/`
-  once, or the mocked app boots to a blank page.
+- **MSW's worker is generated, not committed.** Run
+  `pnpm --filter @dataroom/web exec msw init public/ --no-save` once, or the mocked app boots to a
+  blank page. Without `--no-save`, a clean non-interactive run stops at MSW's package.json prompt.
+- **A warm `node_modules` can hide a broken clean install.** Run `pnpm install --frozen-lockfile`
+  when checking setup docs. This exposed undeclared JWT strategy dependencies even though the
+  lockfile and installed tree already contained them.
 - **`pkill -f vite` matches its own shell** and kills your background server with it. Use the
   harness's background runner, or a pattern that cannot self-match.
 - Per-track traps live in `apps/api/CLAUDE.md` and `apps/web/CLAUDE.md`. Read the one for your
