@@ -119,6 +119,14 @@ empty, error and success tests · no stub presented as finished · committed wit
 - **A warm `node_modules` can hide a broken clean install.** Run `pnpm install --frozen-lockfile`
   when checking setup docs. This exposed undeclared JWT strategy dependencies even though the
   lockfile and installed tree already contained them.
+- **A validation-pipe presence check does not prove contract identity.** A controller can attach a
+  widened local Zod schema and still satisfy “has `ZodValidationPipe`.” Route contract tests must
+  compare the pipe's exact schema with the frozen endpoint request schema.
+- **`corepack pnpm` does not make nested bare `pnpm` commands available.** Root package scripts call
+  `pnpm` internally, so a locked-down shell needs a Corepack shim directory added to `PATH` before
+  those scripts run.
+- **A URL in setup docs must match the dev server bind address.** If the instructions say
+  `127.0.0.1`, pass `--host 127.0.0.1`; a Vite listener on `localhost` may bind only IPv6.
 - **`pkill -f vite` matches its own shell** and kills your background server with it. Use the
   harness's background runner, or a pattern that cannot self-match.
 - Per-track traps live in `apps/api/CLAUDE.md` and `apps/web/CLAUDE.md`. Read the one for your
