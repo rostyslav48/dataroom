@@ -26,7 +26,7 @@ jobs:
         run: node scripts/check-ownership.mjs ${{ github.event.pull_request.base.sha }} ${{ github.event.pull_request.head.sha }}
 
   quality:
-    name: lint · typecheck
+    name: lint · typecheck · contracts
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -51,6 +51,11 @@ jobs:
       - run: pnpm lint
       - run: pnpm --filter @dataroom/contracts build
       - run: pnpm typecheck
+      # The contracts fixture self-test ran locally under the old root `test` script and nowhere in
+      # CI — the same class of gap as the coverage one, in the other direction. Root `test` is now
+      # exactly these three commands, so the two sets cannot drift apart again without someone
+      # editing both files.
+      - run: pnpm --filter @dataroom/contracts test
 
   test-api:
     name: api — unit · integration · contract
