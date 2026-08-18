@@ -2,6 +2,7 @@ import { DataSource } from 'typeorm';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { fixtures } from '@dataroom/contracts';
 import { seed } from '../../src/database/seed';
+import { ROLLUP_DRIFT_QUERY } from '../../src/nodes/rollup-reconciler';
 import { createTestDataSource, resetDatabase } from '../support/database';
 
 interface NodeSnapshot {
@@ -104,24 +105,7 @@ describe('db:seed', () => {
 
     // Derived from the rows, not from the fixture constants the seed was built from — otherwise
     // this asserts that a number equals itself.
-    const drift = (await dataSource.query(
-      `SELECT n.id,
-              n.name,
-              n.subtree_size_bytes AS "storedSize",
-              n.subtree_file_count AS "storedCount",
-              coalesce(sum(d.size_bytes), 0)                     AS "realSize",
-              count(d.id) FILTER (WHERE d.type = 'file')         AS "realCount"
-         FROM nodes n
-         LEFT JOIN nodes d
-                ON d.path LIKE n.path || '%'
-               AND d.id <> n.id
-               AND d.type = 'file'
-               AND d.deleted_at IS NULL
-        WHERE n.type = 'folder' AND n.deleted_at IS NULL
-        GROUP BY n.id, n.name, n.subtree_size_bytes, n.subtree_file_count
-       HAVING n.subtree_size_bytes <> coalesce(sum(d.size_bytes), 0)
-           OR n.subtree_file_count <> count(d.id) FILTER (WHERE d.type = 'file')`,
-    )) as unknown[];
+    const drift = (await dataSource.query(ROLLUP_DRIFT_QUERY)) as unknown[];
 
     expect(drift).toEqual([]);
   });
