@@ -294,12 +294,16 @@ const specs: HandlerSpec[] = [
       const rootId = mockUuid();
       insertNode(folderNode(rootId, null, roomId, parsed.data.name));
       const now = new Date().toISOString();
+      // Owned by whoever is signed in, so a created room lands in *their* `owned` list.
+      const creator =
+        Object.values(fixtures.users).find((user) => user.id === state.currentUserId) ??
+        fixtures.users.owner;
       const room: DataRoomDto = {
         id: roomId,
         name: parsed.data.name,
         rootNodeId: rootId,
-        ownerId: fixtures.IDS.owner,
-        ownerName: fixtures.users.owner.name,
+        ownerId: creator.id,
+        ownerName: creator.name,
         access: 'owner',
         fileCount: 0,
         sizeBytes: 0,
