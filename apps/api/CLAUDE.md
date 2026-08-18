@@ -14,11 +14,11 @@ src/
   database/     entities (typed views over the migration), migrations/index.ts, sql.ts, seed-fixtures
   auth/         Google strategy, two OAuth guards, JwtAuthGuard (global), TokensService
   permissions/  PermissionService, ReadAccessGuard, OwnerGuard, @Resource()   ← the security boundary
-  nodes/        path.util, name-conflict.util, NodesService, controller
+  nodes/        path/name utilities, NodesService, controller, nightly rollup reconciler
   data-rooms/   service + controller
   storage/      StorageService interface + Supabase implementation + sanitizeFilename
   uploads/      init/complete/retry/abort, the content and download redirects, and the sweeper
-  shares/       (not built yet — BE-16a…d; see ../../ProjectPlan/STATUS.md)
+  shares/       complete share lifecycle, recipient management, public resolution
 ```
 
 ## Rules with teeth
@@ -51,16 +51,16 @@ projection; keep the `NODE_COLUMNS` fragment as the single source of the node pr
 ## Traps, every one of which has already bitten
 
 - **`query()` returns `[rows, affected]` for `UPDATE`/`DELETE`**, and plain rows for everything
-  else. The pair is truthy, so `rows[0]` is an *array* rather than undefined and the code sails past
+  else. The pair is truthy, so `rows[0]` is an _array_ rather than undefined and the code sails past
   its not-found branch with nonsense. Use `selectRows` / `updateReturning` / `updateCount` from
   `database/sql.ts`; never call `query()` with `UPDATE … RETURNING` directly.
 - **A guard subclass with no constructor of its own emits no `design:paramtypes`**, so Nest injects
-  nothing and *every* guarded route 500s at once — which looks nothing like a DI problem. Re-declare
+  nothing and _every_ guarded route 500s at once — which looks nothing like a DI problem. Re-declare
   the constructor and call `super()` (see `permissions/access.guard.ts`).
 - **Migrations are listed explicitly** in `database/migrations/index.ts`. A glob resolves
   differently under ts-node, the compiled `dist`, and Vitest, and its failure mode is a silent empty
   list that looks exactly like "nothing to run".
-- **`citext = $1::text` is case-*sensitive*.** The explicit `::text` cast defeats the column type.
+- **`citext = $1::text` is case-_sensitive_.** The explicit `::text` cast defeats the column type.
   Compare with `$1::citext`, or pass the parameter untyped.
 - **Cursor sort values must come from Postgres as text.** `timestamptz` has microsecond resolution
   and a JS `Date` has milliseconds, so a cursor built from `updatedAt.toISOString()` truncates and
@@ -82,10 +82,13 @@ gated command CI runs. A bare `vitest run` skips the coverage thresholds, and a 
 runs locally is a threshold that fails in CI instead.
 
 ```ts
-const harness = await createTestHarness();     // real AppModule, real DB, real middleware stack
+const harness = await createTestHarness(); // real AppModule, real DB, real middleware stack
 await resetDatabase(harness.dataSource);
-const seeded = await seedFixtures(harness.dataSource);   // the canonical tree from @dataroom/contracts
-await request(httpServer(harness)).get(url).set(await harness.authHeader(owner)).expect(200);
+const seeded = await seedFixtures(harness.dataSource); // the canonical tree from @dataroom/contracts
+await request(httpServer(harness))
+  .get(url)
+  .set(await harness.authHeader(owner))
+  .expect(200);
 ```
 
 One Postgres container per run (`test/global-setup.ts`), migrations applied from empty — which means
@@ -111,4 +114,4 @@ stray field ride along, which is the class of bug it exists to catch. Extend it 
   fake store's mint record; a test that only reads the status code passes either way.
 - **Deleting a `ready` `file_versions` row violates the FK from `nodes.current_version_id`.** So a
   sweeper with a wrong filter throws, gets caught, changes nothing, and reports zero — identical to
-  a correct sweep from the outside. Assert on what a query *selects*, not only on what changed.
+  a correct sweep from the outside. Assert on what a query _selects_, not only on what changed.
