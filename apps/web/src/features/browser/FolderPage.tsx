@@ -20,6 +20,7 @@ import { DropZoneOverlay } from '@/features/uploads/DropZoneOverlay';
 import { useUploadStore } from '@/features/uploads/uploadStore';
 import { downloadNode } from '@/features/viewer/download';
 import { ShareDialog } from '@/features/shares/ShareDialog';
+import { RenameRoomDialog } from '@/features/rooms/RenameRoomDialog';
 import { AccessErrorScreen } from '@/features/shares/accessStates';
 import { SharedLayout } from '@/features/shares/SharedLayout';
 import { useSharedByName } from '@/features/shares/useSharedBy';
@@ -46,6 +47,7 @@ export function FolderPage({ nodeId, context }: FolderPageProps): JSX.Element {
   const [sort, setSort] = useState<NodeSortField>('name');
   const [dir, setDir] = useState<'asc' | 'desc'>('asc');
   const [newFolderOpen, setNewFolderOpen] = useState(false);
+  const [renameRoomOpen, setRenameRoomOpen] = useState(false);
   const [deleteTarget, setDeleteTarget] = useState<NodeListItem | null>(null);
   const [moveTarget, setMoveTarget] = useState<NodeListItem | null>(null);
   const [shareTarget, setShareTarget] = useState<NodeListItem | null>(null);
@@ -173,6 +175,13 @@ export function FolderPage({ nodeId, context }: FolderPageProps): JSX.Element {
         folderName={detail.data.node.name}
         fileCount={detail.data.node.subtreeFileCount}
         sizeBytes={detail.data.node.subtreeSizeBytes}
+        onRenameRoom={
+          canManage && context.kind === 'room' && detail.data.node.parentId === null
+            ? () => {
+                setRenameRoomOpen(true);
+              }
+            : undefined
+        }
         onNewFolder={canManage ? openNewFolder : undefined}
         onShare={
           canManage
@@ -262,6 +271,14 @@ export function FolderPage({ nodeId, context }: FolderPageProps): JSX.Element {
       {canManage ? (
         <>
           <DropZoneOverlay parentId={nodeId} folderName={detail.data.node.name} />
+          {context.kind === 'room' && detail.data.node.parentId === null ? (
+            <RenameRoomDialog
+              open={renameRoomOpen}
+              onOpenChange={setRenameRoomOpen}
+              roomId={detail.data.node.dataRoomId}
+              currentName={detail.data.node.name}
+            />
+          ) : null}
           <NewFolderDialog open={newFolderOpen} onOpenChange={setNewFolderOpen} parentId={nodeId} />
           <DeleteConfirmDialog
             open={deleteTarget !== null}

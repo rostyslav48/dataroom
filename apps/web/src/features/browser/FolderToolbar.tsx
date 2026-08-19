@@ -1,4 +1,4 @@
-import { FolderPlus, Share2, Upload } from 'lucide-react';
+import { FolderPlus, Pencil, Share2, Upload } from 'lucide-react';
 import { Button } from '@/components/ui/Button';
 import { formatBytes } from '@/lib/format';
 
@@ -10,6 +10,7 @@ export interface FolderToolbarProps {
   onNewFolder?: (() => void) | undefined;
   onUpload?: (() => void) | undefined;
   onShare?: (() => void) | undefined;
+  onRenameRoom?: (() => void) | undefined;
 }
 
 export function FolderToolbar({
@@ -19,6 +20,7 @@ export function FolderToolbar({
   onNewFolder,
   onUpload,
   onShare,
+  onRenameRoom,
 }: FolderToolbarProps): JSX.Element {
   return (
     <div className="mb-4 flex flex-wrap items-end justify-between gap-3">
@@ -32,6 +34,14 @@ export function FolderToolbar({
       </div>
 
       <div className="flex flex-wrap gap-2">
+        {onRenameRoom === undefined ? null : (
+          <Button
+            leadingIcon={<Pencil aria-hidden="true" className="h-4 w-4" />}
+            onClick={onRenameRoom}
+          >
+            Rename data room
+          </Button>
+        )}
         {onNewFolder === undefined ? null : (
           <Button
             leadingIcon={<FolderPlus aria-hidden="true" className="h-4 w-4" />}

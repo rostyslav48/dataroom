@@ -3,12 +3,13 @@ import { screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { http, HttpResponse } from 'msw';
 import { useLocation } from 'react-router-dom';
-import { API_BASE, fixtures, type NodeDto } from '@dataroom/contracts';
+import { API_BASE, fixtures, type ListDataRoomsResponse, type NodeDto } from '@dataroom/contracts';
 import { useMockApi } from '@/test/msw';
 import { renderWithProviders } from '@/test/harness';
 import { server } from '@/mocks/server';
 import { insertNode, state } from '@/mocks/db';
 import { forceError } from '@/mocks/errorMode';
+import { qk } from '@/lib/queryKeys';
 import { FolderPage } from './FolderPage';
 
 useMockApi();
@@ -22,8 +23,8 @@ function LocationProbe(): JSX.Element {
   return <span data-testid="pathname">{location.pathname}</span>;
 }
 
-function renderFolder(nodeId: string = IDS.rootNode): void {
-  renderWithProviders(<FolderPage nodeId={nodeId} context={roomContext} />, {
+function renderFolder(nodeId: string = IDS.rootNode): ReturnType<typeof renderWithProviders> {
+  return renderWithProviders(<FolderPage nodeId={nodeId} context={roomContext} />, {
     route: `/rooms/${IDS.room}/f/${nodeId}`,
   });
 }
@@ -60,6 +61,71 @@ describe('FolderPage', () => {
     renderFolder();
     expect(await screen.findByRole('heading', { name: 'Project Atlas' })).toBeInTheDocument();
     expect(screen.getByText('3 files · 3.0 MB')).toBeInTheDocument();
+  });
+
+  it('renames an owned data room from its root folder', async () => {
+    const { queryClient } = renderFolder();
+    queryClient.setQueryData<ListDataRoomsResponse>(qk.rooms(), {
+      owned: [fixtures.dataRoom],
+      sharedWithMe: [],
+    });
+    await screen.findByRole('heading', { name: 'Project Atlas' });
+
+    await userEvent.click(screen.getByRole('button', { name: 'Rename data room' }));
+    const input = screen.getByLabelText('Name');
+    expect(input).toHaveValue('Project Atlas');
+    await userEvent.clear(input);
+    await userEvent.type(input, 'Project Aurora');
+    await userEvent.click(screen.getByRole('button', { name: 'Save' }));
+
+    expect(await screen.findByRole('heading', { name: 'Project Aurora' })).toBeInTheDocument();
+    expect(state.rooms[0]?.name).toBe('Project Aurora');
+    expect(state.nodes.get(IDS.rootNode)?.name).toBe('Project Aurora');
+    expect(queryClient.getQueryData<ListDataRoomsResponse>(qk.rooms())?.owned[0]?.name).toBe(
+      'Project Aurora',
+    );
+  });
+
+  it('keeps an invalid room name in the dialog and does not call the API', async () => {
+    renderFolder();
+    await screen.findByRole('heading', { name: 'Project Atlas' });
+
+    await userEvent.click(screen.getByRole('button', { name: 'Rename data room' }));
+    const input = screen.getByLabelText('Name');
+    await userEvent.clear(input);
+    await userEvent.type(input, 'Project/Atlas');
+    await userEvent.click(screen.getByRole('button', { name: 'Save' }));
+
+    expect(await screen.findByRole('alert')).toHaveTextContent('Name cannot contain / or \\');
+    expect(input).toHaveValue('Project/Atlas');
+    expect(state.rooms[0]?.name).toBe('Project Atlas');
+  });
+
+  it('keeps the typed room name in the dialog when the update fails', async () => {
+    renderFolder();
+    await screen.findByRole('heading', { name: 'Project Atlas' });
+
+    await userEvent.click(screen.getByRole('button', { name: 'Rename data room' }));
+    const input = screen.getByLabelText('Name');
+    await userEvent.clear(input);
+    await userEvent.type(input, 'Project Aurora');
+    forceError('INTERNAL', { endpointKey: 'dataRooms.update', times: 1 });
+    await userEvent.click(screen.getByRole('button', { name: 'Save' }));
+
+    expect(await screen.findByRole('alert')).toHaveTextContent('Something went wrong');
+    expect(input).toHaveValue('Project Aurora');
+    expect(state.rooms[0]?.name).toBe('Project Atlas');
+  });
+
+  it('does not offer room rename from a nested folder or to a viewer', async () => {
+    renderFolder(IDS.folderQ3);
+    await screen.findByRole('heading', { name: 'Q3' });
+    expect(screen.queryByRole('button', { name: 'Rename data room' })).not.toBeInTheDocument();
+
+    state.forcedAccess = 'viewer';
+    renderFolder();
+    await screen.findByRole('heading', { name: 'Project Atlas' });
+    expect(screen.queryByRole('button', { name: 'Rename data room' })).not.toBeInTheDocument();
   });
 
   it('renders breadcrumbs for a nested folder', async () => {
