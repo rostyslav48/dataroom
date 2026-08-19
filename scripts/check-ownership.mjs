@@ -40,6 +40,8 @@ const TRACKS = {
     '.github/**',
     'scripts/**',
     'docker-compose.yml',
+    'render.yaml',
+    'vercel.json',
     '.env.example',
     'README.md',
     'CLAUDE.md',
