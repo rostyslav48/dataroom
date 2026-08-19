@@ -21,6 +21,7 @@ import {
 import { env } from './env';
 import { signAccessToken } from './jwt';
 import { IDENTITIES, type IdentityName } from './db';
+import { protectShareResolveApiContext } from './shared-route';
 
 /**
  * The harness's own view of the API.
@@ -60,7 +61,8 @@ export async function contextFor(caller: Caller): Promise<APIRequestContext> {
   // No `baseURL`. Playwright joins with `new URL(path, baseURL)` semantics, so a leading-slash path
   // resolves against the *origin* and silently drops the `/api/v1` prefix — every request would 404
   // in a way that reads like a routing bug in the API. Absolute URLs are built in `Api.absolute`.
-  return playwrightRequest.newContext({ extraHTTPHeaders: headersFor(caller) });
+  const context = await playwrightRequest.newContext({ extraHTTPHeaders: headersFor(caller) });
+  return protectShareResolveApiContext(context);
 }
 
 const fill = (path: string, params: Record<string, string>): string =>

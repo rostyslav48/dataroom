@@ -139,7 +139,7 @@ test.describe('flow 3 — public link, then revoke', () => {
       // from "no such link", which is what the frontend renders two different screens for.
       await anonAfter.expectDenied('get', `/shared/${token}`, 'ACCESS_REVOKED');
 
-      await recipient.page.reload();
+      await gotoShared(recipient.page, recipient.page.url());
       await expect(recipient.ui.state.accessRevoked).toBeVisible();
     } finally {
       await owner.context.close();

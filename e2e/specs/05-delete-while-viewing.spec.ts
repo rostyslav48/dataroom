@@ -126,10 +126,9 @@ test.describe('flow 5 — deleted while viewing', () => {
       // Revoked means the URL is withdrawn too, not merely flagged.
       expect(revoked?.url ?? null).toBeNull();
 
-      // Asserted on the node rather than on `/shared/:token`: that route is throttled to 10 requests
-      // a minute per IP, the whole suite shares one IP, and the viewer context above has already
-      // spent several of them resolving and refetching this very link. A test that trips the
-      // throttle reports RATE_LIMITED and tells you nothing about revocation.
+      // The token-level ACCESS_REVOKED contract is pinned in flow 3. This assertion stays on the
+      // node because the distinct promise here is that a deleted root says ITEM_GONE even after
+      // its share was auto-revoked.
       const anon = await anonymousApi(token);
       await anon.expectDenied('get', `/nodes/${shareRoot.id}`, 'ITEM_GONE');
     } finally {

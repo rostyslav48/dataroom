@@ -5,6 +5,7 @@ import { fixtures } from './contracts';
 import { Api } from './api';
 import { env } from './env';
 import { signIn, type Session } from './session';
+import { protectShareResolveBrowserContext } from './shared-route';
 import { ui, type Ui } from './selectors';
 import type { IdentityName } from './db';
 
@@ -116,6 +117,7 @@ export interface OpenedAs {
 
 export async function openAs(browser: Browser, identity: IdentityName): Promise<OpenedAs> {
   const context = await browser.newContext({ baseURL: env().webUrl });
+  await protectShareResolveBrowserContext(context);
   const session = await signIn(context, identity);
   const page = await context.newPage();
   return { context, page, ui: ui(page), session };
@@ -130,6 +132,7 @@ export async function openAs(browser: Browser, identity: IdentityName): Promise<
  */
 export async function openAnonymous(browser: Browser): Promise<Omit<OpenedAs, 'session'>> {
   const context = await browser.newContext({ baseURL: env().webUrl });
+  await protectShareResolveBrowserContext(context);
   const page = await context.newPage();
   return { context, page, ui: ui(page) };
 }

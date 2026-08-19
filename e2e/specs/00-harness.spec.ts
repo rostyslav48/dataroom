@@ -1,7 +1,14 @@
+import { createServer } from 'node:http';
+import { once } from 'node:events';
+import { request as playwrightRequest } from '@playwright/test';
 import { fixtures } from '../support/contracts';
 import { Api, env, expect, test } from '../support/fixtures';
 import { databaseAvailable, IDENTITIES, issueRefreshToken, upsertAllIdentities } from '../support/db';
 import { signAccessToken, signExpiredAccessToken } from '../support/jwt';
+import {
+  protectShareResolveApiContext,
+  protectShareResolveBrowserContext,
+} from '../support/shared-route';
 
 /**
  * A self-test of the harness, run first so the other five flows fail for their own reasons.
@@ -107,5 +114,62 @@ test.describe('harness', () => {
     ).toBe(200);
 
     await api.dispose();
+  });
+
+  test('share-resolve recovery covers refetches, pages, and direct API contexts', async ({
+    browser,
+  }) => {
+    const statuses: number[] = [];
+    let requestCount = 0;
+    const server = createServer((_request, response) => {
+      requestCount += 1;
+      const status = requestCount % 2 === 1 ? 429 : 200;
+      statuses.push(status);
+      response.writeHead(status, {
+        'Access-Control-Allow-Origin': '*',
+        'Content-Type': 'application/json',
+        'Retry-After-share': '0',
+        'X-RateLimit-Remaining-share': status === 200 ? '9' : '0',
+        'X-RateLimit-Reset-share': '0',
+      });
+      response.end(
+        JSON.stringify(
+          status === 429
+            ? { code: 'RATE_LIMITED', message: 'Too many requests.', requestId: 'harness-probe' }
+            : { ok: true },
+        ),
+      );
+    });
+    server.listen(0, '127.0.0.1');
+    await once(server, 'listening');
+
+    const address = server.address();
+    expect(address && typeof address === 'object').toBe(true);
+    const url = `http://127.0.0.1:${(address as { port: number }).port}/api/v1/shared/probe`;
+    const browserContext = await browser.newContext();
+    await protectShareResolveBrowserContext(browserContext);
+    const page = await browserContext.newPage();
+    const secondPage = await browserContext.newPage();
+    const rawApi = await playwrightRequest.newContext();
+    const api = protectShareResolveApiContext(rawApi);
+
+    try {
+      const navigation = await page.goto(url);
+      const refetchStatus = await page.evaluate(async (shareUrl) => (await fetch(shareUrl)).status, url);
+      const secondNavigation = await secondPage.goto(url);
+      const apiResponse = await api.get(url);
+
+      expect(navigation?.status()).toBe(200);
+      expect(refetchStatus).toBe(200);
+      expect(secondNavigation?.status()).toBe(200);
+      expect(apiResponse.status()).toBe(200);
+      expect(statuses).toEqual([429, 200, 429, 200, 429, 200, 429, 200]);
+      await expect(page.locator('body')).not.toContainText('RATE_LIMITED');
+    } finally {
+      await browserContext.close();
+      await api.dispose();
+      server.close();
+      await once(server, 'close');
+    }
   });
 });

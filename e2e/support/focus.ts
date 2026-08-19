@@ -1,4 +1,5 @@
 import type { Page } from '@playwright/test';
+import { waitForProtectedShareResolves } from './shared-route';
 
 /**
  * Make a page believe the user just came back to it.
@@ -48,4 +49,5 @@ export async function simulateRefocus(page: Page): Promise<void> {
     window.dispatchEvent(new Event('visibilitychange'));
     window.dispatchEvent(new Event('focus'));
   });
+  await waitForProtectedShareResolves(page.context());
 }
