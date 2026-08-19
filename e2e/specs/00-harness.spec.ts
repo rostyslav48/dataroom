@@ -1,15 +1,22 @@
+import { spawn } from 'node:child_process';
 import { createServer } from 'node:http';
 import { once } from 'node:events';
 import { request as playwrightRequest } from '@playwright/test';
 import { fixtures } from '../support/contracts';
 import { Api, env, expect, test } from '../support/fixtures';
-import { databaseAvailable, IDENTITIES, issueRefreshToken, upsertAllIdentities } from '../support/db';
+import {
+  databaseAvailable,
+  IDENTITIES,
+  issueRefreshToken,
+  upsertAllIdentities,
+} from '../support/db';
 import { signAccessToken, signExpiredAccessToken } from '../support/jwt';
 import {
   assertShareResolveTopology,
   protectShareResolveApiContext,
   protectShareResolveBrowserContext,
 } from '../support/shared-route';
+import { acquireShareResolveProcessLock } from '../support/suite-lock';
 
 /**
  * A self-test of the harness, run first so the other five flows fail for their own reasons.
@@ -78,7 +85,10 @@ test.describe('harness', () => {
   });
 
   test('the refresh cookie the harness writes is honoured by the real endpoint', async () => {
-    test.skip(!databaseAvailable(), 'No DATABASE_URL: sessions are injected by route stub instead.');
+    test.skip(
+      !databaseAvailable(),
+      'No DATABASE_URL: sessions are injected by route stub instead.',
+    );
 
     const token = await issueRefreshToken(IDENTITIES.owner.id);
     const api = await Api.as({ kind: 'anonymous' });
@@ -127,6 +137,68 @@ test.describe('harness', () => {
     ).toThrow(/sharding.*not supported/i);
   });
 
+  test('the suite lock serializes an independent process on the same host', async () => {
+    const portProbe = createServer();
+    portProbe.listen(0, '127.0.0.1');
+    await once(portProbe, 'listening');
+    const address = portProbe.address();
+    expect(address && typeof address === 'object').toBe(true);
+    const port = (address as { port: number }).port;
+    portProbe.close();
+    await once(portProbe, 'close');
+
+    const holder = spawn(
+      process.execPath,
+      [
+        '-e',
+        [
+          "const net = require('node:net');",
+          'const server = net.createServer();',
+          "server.listen(Number(process.argv[1]), '127.0.0.1', () => process.stdout.write('ready\\n'));",
+          "process.stdin.once('data', () => server.close(() => process.exit(0)));",
+        ].join(''),
+        String(port),
+      ],
+      { stdio: ['pipe', 'pipe', 'pipe'] },
+    );
+    const [ready] = await once(holder.stdout, 'data');
+    expect(String(ready)).toContain('ready');
+
+    const waitMessages: string[] = [];
+    let acquired = false;
+    let lock: Awaited<ReturnType<typeof acquireShareResolveProcessLock>> | undefined;
+    const waiting = acquireShareResolveProcessLock({
+      port,
+      retryIntervalMs: 10,
+      timeoutMs: 2_000,
+      onWait: (message) => waitMessages.push(message),
+    }).then((lock) => {
+      acquired = true;
+      return lock;
+    });
+
+    try {
+      await new Promise((resolve) => setTimeout(resolve, 50));
+      expect(acquired).toBe(false);
+      expect(waitMessages).toHaveLength(1);
+
+      holder.stdin.write('release');
+      await once(holder, 'exit');
+
+      lock = await waiting;
+      expect(acquired).toBe(true);
+      await lock.release();
+      await lock.release();
+    } finally {
+      if (holder.exitCode === null) {
+        holder.stdin.write('release');
+        await once(holder, 'exit');
+      }
+      lock ??= await waiting.catch(() => undefined);
+      await lock?.release();
+    }
+  });
+
   test('share-resolve recovery covers refetches, pages, and direct API contexts', async ({
     browser,
   }) => {
@@ -171,7 +243,11 @@ test.describe('harness', () => {
     const api = protectShareResolveApiContext(rawApi);
 
     try {
+      const capturedRequestPromise = page.waitForRequest(
+        (request) => request.method() === 'GET' && request.url() === url,
+      );
       const navigation = await page.goto(url);
+      const capturedRequest = await capturedRequestPromise;
       const refetchStatus = await page.evaluate(
         async (shareUrl) => (await fetch(shareUrl)).status,
         url,
@@ -179,6 +255,7 @@ test.describe('harness', () => {
       const secondNavigation = await secondPage.goto(url);
       const apiResponse = await api.get(url);
       const fetchResponse = await api.fetch(url);
+      const requestFetchResponse = await api.fetch(capturedRequest);
       const postResponse = await api.fetch(url, { method: 'POST' });
       const nonResolveResponse = await api.fetch(nonResolveUrl);
 
@@ -187,13 +264,13 @@ test.describe('harness', () => {
       expect(secondNavigation?.status()).toBe(200);
       expect(apiResponse.status()).toBe(200);
       expect(fetchResponse.status()).toBe(200);
+      expect(requestFetchResponse.status()).toBe(200);
       expect(postResponse.status()).toBe(429);
       expect(nonResolveResponse.status()).toBe(429);
-      expect(statuses).toEqual([429, 200, 429, 200, 429, 200, 429, 200, 429, 200, 429, 429]);
-      expect(unguardedRequests).toEqual([
-        'POST /api/v1/shared/probe',
-        'GET /api/v1/nodes/probe',
+      expect(statuses).toEqual([
+        429, 200, 429, 200, 429, 200, 429, 200, 429, 200, 429, 200, 429, 429,
       ]);
+      expect(unguardedRequests).toEqual(['POST /api/v1/shared/probe', 'GET /api/v1/nodes/probe']);
       await expect(page.locator('body')).not.toContainText('RATE_LIMITED');
     } finally {
       await browserContext.close();

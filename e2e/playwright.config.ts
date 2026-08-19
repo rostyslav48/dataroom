@@ -21,6 +21,7 @@ const webUrl = process.env.E2E_WEB_URL ?? 'http://localhost:5173';
 
 export default defineConfig({
   testDir: './specs',
+  globalSetup: './support/global-setup.ts',
   fullyParallel: false,
   forbidOnly: !!process.env.CI,
   retries: process.env.CI ? 1 : 0,

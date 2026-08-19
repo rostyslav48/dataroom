@@ -37,8 +37,8 @@ export interface ShareResolveTopology {
  * each keep a conflicting view of the same IP quota. Guard the topology instead of leaving the
  * `workers: 1` config as an overrideable convention.
  *
- * Two entirely independent external Playwright invocations still cannot share memory. The first
- * response headers (or a real 429) are how a new invocation learns the server state they left.
+ * Whole invocations on one host are serialized by `global-setup.ts`; distributed runners need the
+ * CI provider's concurrency primitive because no process lock can cross host boundaries.
  */
 export function assertShareResolveTopology({ workers, shard }: ShareResolveTopology): void {
   if (workers !== 1) {
