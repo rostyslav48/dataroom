@@ -69,6 +69,7 @@ export function UploadQueuePanel(): JSX.Element | null {
 
   return (
     <section
+      data-testid="upload-queue"
       aria-label="Uploads"
       className="fixed bottom-4 right-4 z-40 w-[min(24rem,calc(100vw-2rem))] overflow-hidden rounded-lg border border-line bg-surface shadow-lg"
     >

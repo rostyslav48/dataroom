@@ -104,6 +104,7 @@ export function ViewerToolbar({
         variant="secondary"
         size="sm"
         busy={downloading}
+        data-testid="toolbar-download"
         leadingIcon={<Download aria-hidden="true" className="h-4 w-4" />}
         onClick={onDownload}
       >

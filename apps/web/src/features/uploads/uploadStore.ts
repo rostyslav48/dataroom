@@ -104,6 +104,9 @@ export const useUploadStore = create<UploadStore>()((set, get) => {
       await putWithProgress({
         url: uploadUrl,
         file: current.file,
+        // The same string `init` declared. The API verifies the stored type against it, so an
+        // upload that lets storage sniff its own type is rejected at `complete`.
+        contentType: current.file.type,
         onProgress: (percent) => {
           patch(localId, { progress: percent });
         },

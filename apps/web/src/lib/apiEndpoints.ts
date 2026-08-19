@@ -16,6 +16,7 @@ import {
   ShareDto,
   DataRoomDto,
   endpoints,
+  isSafeReturnTo,
 } from '@dataroom/contracts';
 import { apiRequest, buildUrl, type QueryParams } from './api';
 
@@ -40,10 +41,7 @@ export interface ShareTokenOption {
  * path, so we only ever send one.
  */
 export function googleSignInUrl(returnTo?: string): string {
-  const query: QueryParams =
-    returnTo !== undefined && returnTo.startsWith('/') && !returnTo.startsWith('//')
-      ? { returnTo }
-      : {};
+  const query: QueryParams = isSafeReturnTo(returnTo) ? { returnTo } : {};
   return buildUrl(endpoints.auth.googleStart, {}, query);
 }
 

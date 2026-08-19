@@ -164,7 +164,17 @@ export function ShareDialog({ open, onOpenChange, node }: ShareDialogProps): JSX
               );
             }}
             revokingRecipientId={revokingRecipientId}
-            revokeError={revokeRecipient.error}
+            // `revokeShare` is shared with the link tab, so its error belongs here only when the
+            // call it came from targeted *this* share. `variables` is the id the last call was
+            // given, which is exactly that question.
+            revokeError={
+              revokeRecipient.error ??
+              (revokeShare.variables === permissioned?.id ? revokeShare.error : null)
+            }
+            onRevokeShare={() => {
+              if (permissioned !== undefined) revokeShare.mutate(permissioned.id);
+            }}
+            revokingShare={revokeShare.isPending && revokeShare.variables === permissioned?.id}
           />
         </Tabs.Content>
 

@@ -1,6 +1,8 @@
 import { Navigate, useRoutes, type RouteObject } from 'react-router-dom';
 import { LoginPage } from '@/features/auth/LoginPage';
 import { RequireAuth } from '@/features/auth/RequireAuth';
+import { ResumePage } from '@/features/auth/ResumePage';
+import { RESUME_PATH } from '@/features/auth/returnToStash';
 import { AppShell } from '@/components/layout/AppShell';
 import { RoomsPage } from '@/features/rooms/RoomsPage';
 import { RoomFileRoute, RoomFolderRoute, RoomRootRoute } from './RoomRoutes';
@@ -25,6 +27,9 @@ export const routes: RouteObject[] = [
     element: <RequireAuth />,
     children: [
       { path: '/', element: <Navigate to="/rooms" replace /> },
+      // Inside RequireAuth: resuming is only meaningful once the session exists, and an
+      // unauthenticated hit here should go through login like any other protected route.
+      { path: `${RESUME_PATH}/:key`, element: <ResumePage /> },
       {
         element: <AppShell />,
         children: [

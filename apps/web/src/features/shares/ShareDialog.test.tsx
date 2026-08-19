@@ -251,6 +251,37 @@ describe('ShareDialog — people', () => {
     expect(screen.getByText('Active')).toBeInTheDocument();
   });
 
+  it('revokes the whole share, ending access for everyone at once', async () => {
+    // The per-row control revokes one grant; this revokes the share itself. An owner taking access
+    // back under time pressure should not have to click once per recipient to get there.
+    renderDialog(legal);
+    await screen.findByText('viewer@example.com');
+    const shareId = state.shares.find((share) => share.type === 'permissioned')?.id;
+
+    await userEvent.click(screen.getByRole('button', { name: 'Stop sharing' }));
+
+    await waitFor(() => {
+      expect(state.shares.find((share) => share.id === shareId)?.revokedAt).not.toBeNull();
+    });
+  });
+
+  it('does not offer to stop sharing when nobody has been invited', async () => {
+    renderDialog(overview);
+    await screen.findByText('Nobody has been invited to this item yet.');
+    expect(screen.queryByRole('button', { name: 'Stop sharing' })).not.toBeInTheDocument();
+  });
+
+  it('reports a failed whole-share revoke and keeps the recipients visible', async () => {
+    renderDialog(legal);
+    await screen.findByText('viewer@example.com');
+
+    forceError('INTERNAL', { endpointKey: 'shares.revoke', times: 1 });
+    await userEvent.click(screen.getByRole('button', { name: 'Stop sharing' }));
+
+    expect(await screen.findByRole('alert')).toHaveTextContent('Something went wrong');
+    expect(screen.getByText('viewer@example.com')).toBeInTheDocument();
+  });
+
   it('reports a failed invite without losing the list', async () => {
     renderDialog(legal);
     await screen.findByText('viewer@example.com');

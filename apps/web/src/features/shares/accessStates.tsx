@@ -7,6 +7,7 @@ import { presentError } from '@/lib/errorMap';
 import { formatDate } from '@/lib/format';
 import { assignLocation } from '@/lib/browser';
 import { googleSignInUrl } from '@/lib/apiEndpoints';
+import { stashReturnTo } from '@/features/auth/returnToStash';
 import { AuthContext } from '@/features/auth/AuthProvider';
 import { contextRoot, folderPath, type BrowseContext } from '@/features/browser/browseContext';
 
@@ -205,7 +206,11 @@ export function AccessErrorScreen({
           sharedWith={sharedWith}
           signedInAs={auth?.user?.email}
           onSwitchAccount={() => {
-            const returnTo = `${window.location.pathname}${window.location.search}`;
+            // On `/s/:token/…` the path *is* the share token, and `returnTo` is handed to Google
+            // in the OAuth `state`. Stash it and send an opaque key instead.
+            const returnTo = stashReturnTo(
+              `${window.location.pathname}${window.location.search}`,
+            );
             const go = (): void => {
               assignLocation(googleSignInUrl(returnTo));
             };

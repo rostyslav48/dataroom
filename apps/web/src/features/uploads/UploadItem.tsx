@@ -29,7 +29,11 @@ export function UploadItem({ item, onCancel, onRetry, onDismiss }: UploadItemPro
   const renamed = item.finalName !== undefined && item.finalName !== item.requestedName;
 
   return (
-    <li className="flex items-start gap-3 border-b border-line px-3 py-2 last:border-b-0">
+    <li
+      data-testid="upload-item"
+      data-upload-status={item.status}
+      className="flex items-start gap-3 border-b border-line px-3 py-2 last:border-b-0"
+    >
       <div className="min-w-0 flex-1">
         <p className="flex min-w-0 items-center gap-1 text-sm text-ink">
           <span className="truncate">{item.requestedName}</span>

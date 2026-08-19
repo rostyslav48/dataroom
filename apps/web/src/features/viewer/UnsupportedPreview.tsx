@@ -20,7 +20,10 @@ export function UnsupportedPreview({
   onDownload,
 }: UnsupportedPreviewProps): JSX.Element {
   return (
-    <div className="m-6 flex flex-col items-center gap-3 rounded-lg border border-line bg-surface p-10 text-center">
+    <div
+      data-testid="unsupported-preview"
+      className="m-6 flex flex-col items-center gap-3 rounded-lg border border-line bg-surface p-10 text-center"
+    >
       <File aria-hidden="true" className="h-10 w-10 text-ink-subtle" />
       <p className="text-sm font-semibold text-ink">{fileName}</p>
       <p className="text-sm text-ink-muted">
@@ -30,7 +33,7 @@ export function UnsupportedPreview({
         Only PDFs can be previewed here. Download the file to open it in the application it belongs
         to.
       </p>
-      <Button variant="primary" onClick={onDownload}>
+      <Button variant="primary" data-testid="unsupported-download" onClick={onDownload}>
         Download
       </Button>
     </div>

@@ -1,12 +1,18 @@
 import { Navigate, Outlet, useLocation } from 'react-router-dom';
+import { isSafeReturnTo } from '@dataroom/contracts';
 import { Skeleton } from '@/components/ui/Skeleton';
 import { useAuth } from './useAuth';
 
-/** Same-origin path only: an absolute URL or a protocol-relative `//host` here is an open redirect. */
+/**
+ * Same-origin path only: an absolute URL, a protocol-relative `//host`, or a backslash-relative
+ * `/\host` here is an open redirect.
+ *
+ * The predicate lives in the contract because the server validates the same value on the OAuth
+ * round trip. Two implementations of one rule is how `/\evil.com` passed the client copy while the
+ * server copy was never asked.
+ */
 export function safeReturnTo(candidate: string | null | undefined): string | null {
-  if (candidate === null || candidate === undefined || candidate === '') return null;
-  if (!candidate.startsWith('/') || candidate.startsWith('//')) return null;
-  return candidate;
+  return isSafeReturnTo(candidate) ? candidate : null;
 }
 
 export function RequireAuth(): JSX.Element {

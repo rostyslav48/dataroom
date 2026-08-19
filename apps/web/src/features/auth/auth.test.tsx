@@ -128,11 +128,44 @@ describe('RequireAuth', () => {
     });
   });
 
-  it('rejects an off-origin returnTo', () => {
+  it('accepts an ordinary same-origin path', () => {
     expect(safeReturnTo('/rooms/r1')).toBe('/rooms/r1');
-    expect(safeReturnTo('//evil.example.com')).toBeNull();
-    expect(safeReturnTo('https://evil.example.com')).toBeNull();
-    expect(safeReturnTo(null)).toBeNull();
+    expect(safeReturnTo('/rooms/r1?sort=size#top')).toBe('/rooms/r1?sort=size#top');
+    expect(safeReturnTo('/')).toBe('/');
+  });
+
+  it.each([
+    ['null', null],
+    ['undefined', undefined],
+    ['the empty string', ''],
+    ['an absolute url', 'https://evil.example.com'],
+    ['a protocol-relative url', '//evil.example.com'],
+    ['a bare host', 'evil.example.com'],
+    ['a scheme-only value', 'javascript:alert(1)'],
+    // The bypass this guard was rewritten for. Every browser's URL parser treats `\` as `/` in
+    // the authority position, so `new URL('/\\evil.com', document.baseURI)` is
+    // `https://evil.com/` — and `<Navigate to="/\\evil.com">` therefore leaves the origin. The
+    // old check ("starts with `/`, does not start with `//`") accepted all of these.
+    ['a backslash-relative url', '/\\evil.example.com'],
+    ['a mixed separator url', '/\\/evil.example.com'],
+    ['a slash-then-backslash url', '/\\\\evil.example.com'],
+    ['a backslash anywhere in the path', '/rooms/\\evil.example.com'],
+    ['a percent-encoded backslash', '/%5Cevil.example.com'],
+    // Browsers strip tab, CR and LF from a URL before parsing, turning these into `//evil…`.
+    ['a tab-smuggled authority', '/\t/evil.example.com'],
+    ['a newline-smuggled authority', '/\n/evil.example.com'],
+    ['a carriage-return-smuggled authority', '/\r/evil.example.com'],
+  ])('rejects %s', (_label, candidate) => {
+    expect(safeReturnTo(candidate)).toBeNull();
+  });
+
+  it('does not resolve off-origin for anything it accepts', () => {
+    // The property underneath the rule, asserted against the parser rather than restated: whatever
+    // survives `safeReturnTo` must resolve to the page's own origin.
+    const base = 'https://app.example.com';
+    for (const candidate of ['/rooms/r1', '/', '/s/abc?x=1', '/rooms/r1#frag']) {
+      expect(new URL(safeReturnTo(candidate) ?? '', base).origin).toBe(base);
+    }
   });
 });
 

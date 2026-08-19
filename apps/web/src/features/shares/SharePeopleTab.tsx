@@ -16,6 +16,9 @@ export interface SharePeopleTabProps {
   onRevokeRecipient: (recipientId: string) => void;
   revokingRecipientId: string | null;
   revokeError: unknown;
+  /** Revokes the whole share, ending access for everyone on it at once. */
+  onRevokeShare: () => void;
+  revokingShare: boolean;
 }
 
 export function SharePeopleTab({
@@ -28,6 +31,8 @@ export function SharePeopleTab({
   onRevokeRecipient,
   revokingRecipientId,
   revokeError,
+  onRevokeShare,
+  revokingShare,
 }: SharePeopleTabProps): JSX.Element {
   const [pending, setPending] = useState<string[]>([]);
   const recipients = share?.recipients ?? [];
@@ -92,16 +97,40 @@ export function SharePeopleTab({
       {recipients.length === 0 ? (
         <p className="text-sm text-ink-muted">Nobody has been invited to this item yet.</p>
       ) : (
-        <ul>
-          {recipients.map((recipient) => (
-            <RecipientRow
-              key={recipient.id}
-              recipient={recipient}
-              revoking={revokingRecipientId === recipient.id}
-              onRevoke={onRevokeRecipient}
-            />
-          ))}
-        </ul>
+        <>
+          <ul>
+            {recipients.map((recipient) => (
+              <RecipientRow
+                key={recipient.id}
+                recipient={recipient}
+                revoking={revokingRecipientId === recipient.id}
+                onRevoke={onRevokeRecipient}
+              />
+            ))}
+          </ul>
+
+          {/*
+            Removing people one at a time is the ordinary case; this is the "take it back from
+            everyone, now" case, and an owner should not have to click N times to get there under
+            time pressure. Both exist because they mean different things — the per-row control
+            revokes one grant, this revokes the share itself, so a later invitation starts a new
+            share rather than reopening an old one.
+          */}
+          <div className="flex items-center justify-between gap-3 border-t border-line pt-3">
+            <p className="text-sm text-ink-muted">
+              Ends access for everyone invited here. It cannot be undone — you would need to invite
+              them again.
+            </p>
+            <Button
+              variant="danger"
+              busy={revokingShare}
+              className="shrink-0"
+              onClick={onRevokeShare}
+            >
+              Stop sharing
+            </Button>
+          </div>
+        </>
       )}
     </div>
   );

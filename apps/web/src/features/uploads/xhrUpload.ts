@@ -21,6 +21,14 @@ export class UploadTransportError extends Error {
 export interface PutWithProgressOptions {
   url: string;
   file: File;
+  /**
+   * The type this upload was **declared** as at `init`, sent verbatim.
+   *
+   * Storage records whatever header arrives here, and `POST /uploads/:versionId/complete` refuses
+   * to promote a version whose stored type disagrees with the declared one. Sending anything else —
+   * including omitting the header and letting storage guess — fails the upload at `complete`.
+   */
+  contentType: string;
   onProgress: (percent: number) => void;
   /** Handed the request so the caller can abort it; cancellation is a first-class case here. */
   onStart?: (xhr: XMLHttpRequest) => void;
@@ -29,13 +37,14 @@ export interface PutWithProgressOptions {
 export function putWithProgress({
   url,
   file,
+  contentType,
   onProgress,
   onStart,
 }: PutWithProgressOptions): Promise<void> {
   return new Promise<void>((resolve, reject) => {
     const xhr = new XMLHttpRequest();
     xhr.open('PUT', url, true);
-    if (file.type !== '') xhr.setRequestHeader('Content-Type', file.type);
+    if (contentType !== '') xhr.setRequestHeader('Content-Type', contentType);
 
     xhr.upload.onprogress = (event: ProgressEvent): void => {
       // A zero-byte file is legal, and dividing by its size is not: it reports as complete.
