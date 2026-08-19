@@ -1,5 +1,6 @@
 import { Suspense, lazy, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
+import { PREVIEWABLE_MIME_TYPES } from '@dataroom/contracts';
 import { Skeleton } from '@/components/ui/Skeleton';
 import { presentError } from '@/lib/errorMap';
 import { nodeContentUrl } from '@/lib/apiEndpoints';
@@ -8,10 +9,7 @@ import { useNodeDetail } from '@/features/browser/useNodeQueries';
 import { AccessErrorScreen } from '@/features/shares/accessStates';
 import { SharedLayout } from '@/features/shares/SharedLayout';
 import { useSharedByName } from '@/features/shares/useSharedBy';
-import {
-  shareResolveProvesRootGone,
-  useShareResolve,
-} from '@/features/shares/useShareResolve';
+import { shareResolveProvesRootGone, useShareResolve } from '@/features/shares/useShareResolve';
 import { ViewerToolbar } from './ViewerToolbar';
 import { UnsupportedPreview } from './UnsupportedPreview';
 import { PdfErrorState } from './PdfErrorState';
@@ -26,8 +24,6 @@ export interface FileViewerPageProps {
   nodeId: string;
   context: BrowseContext;
 }
-
-const PREVIEWABLE = 'application/pdf';
 
 export function FileViewerPage({ nodeId, context }: FileViewerPageProps): JSX.Element {
   const navigate = useNavigate();
@@ -90,7 +86,7 @@ export function FileViewerPage({ nodeId, context }: FileViewerPageProps): JSX.El
 
   const node = detail.data.node;
   const parentPath = folderPath(context, node.parentId ?? detail.data.shareRootId);
-  const isPdf = node.mimeType === PREVIEWABLE;
+  const isPdf = PREVIEWABLE_MIME_TYPES.some((mimeType) => node.mimeType === mimeType);
   const contentUrl =
     attempt === 0 ? nodeContentUrl(nodeId) : `${nodeContentUrl(nodeId)}?refresh=${String(attempt)}`;
 
@@ -119,7 +115,10 @@ export function FileViewerPage({ nodeId, context }: FileViewerPageProps): JSX.El
       />
 
       {downloadError === null ? null : (
-        <p role="alert" className="border-b border-line bg-danger-subtle px-3 py-2 text-sm text-danger">
+        <p
+          role="alert"
+          className="border-b border-line bg-danger-subtle px-3 py-2 text-sm text-danger"
+        >
           {downloadError}
         </p>
       )}
@@ -177,11 +176,7 @@ export function FileViewerPage({ nodeId, context }: FileViewerPageProps): JSX.El
   if (detail.data.access === 'owner') return body;
 
   return (
-    <SharedLayout
-      ownerName={sharedBy}
-      itemName={node.name}
-      standalone={context.kind === 'share'}
-    >
+    <SharedLayout ownerName={sharedBy} itemName={node.name} standalone={context.kind === 'share'}>
       {body}
     </SharedLayout>
   );
