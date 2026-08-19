@@ -6,11 +6,24 @@
   "outputDirectory": "apps/web/dist",
   "rewrites": [
     {
+      "source": "/api/:path*",
+      "destination": "https://dataroom-api-6cto.onrender.com/api/:path*"
+    },
+    {
       "source": "/(.*)",
       "destination": "/index.html"
     }
   ],
   "headers": [
+    {
+      "source": "/api/:path*",
+      "headers": [
+        {
+          "key": "x-vercel-enable-rewrite-caching",
+          "value": "0"
+        }
+      ]
+    },
     {
       "source": "/(.*)",
       "headers": [

@@ -29,7 +29,7 @@ services:
       - key: REFRESH_TOKEN_TTL
         value: 30d
       - key: COOKIE_SAMESITE
-        value: none
+        value: lax
       - key: COOKIE_SECURE
         value: "true"
       - key: SUPABASE_URL
