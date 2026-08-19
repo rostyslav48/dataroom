@@ -16,7 +16,11 @@ and local MSW experience are implemented. No public deployment URL is published 
 Live Google OAuth, the cross-origin production cookie, and raw browser upload progress still require
 the external Google, Supabase, Render, and Vercel credentials described below.
 
-One security-design decision is also still open: refresh-token reuse currently has a 15-second grace
+The findings of the 19 August security review and QA audit have been remediated in this checkout —
+see **Security posture** below for what each control now is, and its **Accepted exceptions** table
+for the three that were deliberately left standing with reasons.
+
+One security-design decision is still open: refresh-token reuse currently has a 15-second grace
 window for simultaneous browser-tab refreshes. See the deviations register for the exact trade-off.
 
 ## What is implemented
@@ -238,12 +242,18 @@ they do not use the developer database. The Playwright suite expects a separatel
 the canonical seed:
 
 ```bash
+set -a; . ./.env; set +a          # DATABASE_URL and JWT_ACCESS_SECRET, from the same file the API read
 E2E_WEB_URL=http://127.0.0.1:5173 \
 E2E_API_URL=http://127.0.0.1:3000 \
-DATABASE_URL=postgres://dataroom:dataroom@localhost:5432/dataroom \
-JWT_ACCESS_SECRET='<the value from .env>' \
 pnpm test:e2e
 ```
+
+**`DATABASE_URL` must be the API's database, not merely *a* database.** The harness upserts its
+identities directly over SQL while the API reads through its own connection, so pointing the two at
+different databases produces a suite in which every login fails — and it fails as the signed-out
+landing page, which looks exactly like a broken session rather than like a misconfiguration. Sourcing
+`.env` rather than pasting a connection string is what makes that impossible; a hardcoded
+`postgres://…@localhost:5432/dataroom` in this command was worth fifteen misleading failures once.
 
 The stack it points at must have been started with `WEB_ORIGIN` equal to `E2E_WEB_URL`, for the CORS
 reason above; the browser-driven flows fail on the signed-out landing page otherwise.
@@ -409,6 +419,77 @@ Before calling a deployment verified, test the refresh cookie in Safari and Chro
 real multi-file upload with visible progress, open and download a file, and confirm a revoked share fails
 on the very next request.
 
+### Two production settings that fail silently if you skip them
+
+Both are now enforced by the environment schema, so a misconfigured deploy stops at boot rather than
+at rest. They are called out because their failure modes are invisible:
+
+- **`DATABASE_URL` must carry `?sslmode=require`.** `node-postgres` speaks plaintext unless asked
+  otherwise, and the API and the database are on different hosts. Without it, refresh-token hashes
+  and share-recipient addresses cross the public internet in the clear, and nothing anywhere reports
+  it — the only way it surfaces is if the server happens to *refuse* the cleartext connection.
+  `sslmode=prefer` and `allow` do not count; both fall back silently.
+- **`TRUST_PROXY_HOPS` must be `1`** (already set in `render.yaml`). Express leaves `req.ips` empty
+  unless it trusts a proxy, so behind a platform load balancer every visitor keys to the same
+  rate-limit bucket and the 10/min limit on `GET /shared/:token` becomes 10/min for the entire
+  internet. It is a hop *count* and not `true`, because `true` trusts the whole `X-Forwarded-For`
+  chain and lets any caller mint themselves unlimited buckets by prepending an address.
+
+## Security posture
+
+The controls that are load-bearing, and the exceptions that are deliberate.
+
+**Where access is decided.** One service (`PermissionService`), behind one guard, never cached, so
+revocation takes effect on the next request. No ownership check exists anywhere outside
+`permissions/`.
+
+**Redirects.** `isSafeReturnTo` in `@dataroom/contracts` is the single definition of "same-origin
+path", used by the client gate, the sign-in URL builder and the server's OAuth `state` validation.
+It rejects `//host`, `/\host`, percent-encoded backslashes and control characters — the browser URL
+parser treats `\` as `/` in the authority position, and strips tab/CR/LF before parsing, so all of
+those resolve off-origin. Three hand-rolled copies of a weaker rule is how the backslash bypass got
+in; there is deliberately one now, with the full case list pinned in both suites.
+
+**Uploaded bytes.** The declared MIME type becomes a fact about the file only at `complete`, which
+reads back the content type storage recorded and refuses to promote a version that disagrees — the
+browser writes that header itself on its direct `PUT`, so the allowlist at `init` is a claim until
+then. `GET /nodes/:id/content` additionally serves `inline` only for `PREVIEWABLE_MIME_TYPES`;
+everything else is a download regardless of what the caller asked for. Two independent failures
+would be needed to get arbitrary markup rendered from the storage origin.
+
+**Signed URLs.** Reads live 60 seconds; writes live 15 minutes and only `retry` may overwrite. A
+write grant is a live capability to replace the bytes at a key, so a longer one meant a completed,
+shared, already-read version could be swapped out from under its recipients.
+
+**Rate limiting.** Every route, keyed per client IP: 1,200/min globally (`RATE_LIMIT_PER_MINUTE`),
+300/min on the public auth routes, 120/min on `/health` (which runs a real query), 10/min on
+`GET /shared/:token`. These bound resource exhaustion, not guessing — the refresh token is 48 random
+bytes and the share token 32, so neither is reachable by brute force at any rate.
+
+**Cross-site.** The refresh cookie is `SameSite=None` in production by necessity, so `SameOriginGuard`
+refuses `POST /auth/refresh` and `POST /auth/logout` when the browser reports an `Origin` other than
+`WEB_ORIGIN`. Without it, any page could spend a visitor's refresh token and log their other tabs
+out. `vercel.json` serves the SPA with a CSP (`frame-ancestors 'none'`, `object-src 'none'`,
+`worker-src 'self' blob:` for pdf.js), HSTS, `X-Frame-Options`, `nosniff`, and a
+`strict-origin-when-cross-origin` referrer policy — the last matters specifically because share
+tokens live in the URL path.
+
+**Share tokens and OAuth.** `returnTo` is stashed in `sessionStorage` under a random key and only
+the key travels through the OAuth `state`, so a `/s/<token>/…` path is never handed to Google. The
+`state` parameter is encoding, not encryption.
+
+**Housekeeping.** Expired refresh-token rows are pruned nightly; a revoked row is kept for a full
+refresh lifetime past revocation, because it is what makes a replay *detectable* rather than an
+ordinary "no such token".
+
+### Accepted exceptions
+
+| Item | Why it stands |
+| --- | --- |
+| `@nestjs/core` GHSA-36xv-jgw5-4q75 (moderate) | CRLF injection in `SseStream`. This API declares no SSE route, so the code path is unreachable. The fix is `>=11.1.18`, a Nest major upgrade that also moves `platform-express` to Express 5 — scheduled, not skipped. `pnpm audit --prod --audit-level=high` is the CI gate, so this does not block a build; every advisory above moderate resolves through `pnpm.overrides` in the root `package.json`. |
+| Logout does not invalidate an already-issued access token | It is a stateless JWT with a 15-minute TTL; logout revokes the whole refresh family, so the window is bounded and non-renewable. Making it revocable means a denylist checked on every request, which trades the property this design was chosen for. Stated rather than assumed. |
+| The 15-second refresh replay grace window | See CCP-6 in the deviations register — an open owner decision, not an oversight. |
+
 ## Deviations register
 
 The implementation plan records deliberate changes as Contract Change Protocol notes:
@@ -421,6 +502,8 @@ The implementation plan records deliberate changes as Contract Change Protocol n
 | CCP-5 | Applied                    | Widened upload size validation from positive to nonnegative, because empty files are legitimate; completion still requires exact equality with object-storage size.                                                                                         |
 | CCP-6 | **Pending owner decision** | The code allows a 15-second refresh replay grace window so two tabs do not log each other out. The spec still promises unconditional family revocation. The recommended successor-token design removes the theft window without breaking multi-tab refresh. |
 | CCP-7 | Applied                    | Abort deletes the pending version and placeholder node instead of inventing an unread `abandoned` state; this immediately frees the reserved filename and matches sweeper cleanup.                                                                          |
+| DEC-1 | **Settled**                | Permissioned shares now expose *both* revocations, because they mean different things: the per-recipient control ends one grant, and **Stop sharing** ends the share itself so a later invitation starts a new one rather than reopening the old. Covered by component and browser tests. |
+| CCP-9 | Applied                    | `packages/contracts` gained `isSafeReturnTo`, the one definition of "same-origin path", and `GoogleAuthQuery` now refines against it. A contract edit was unavoidable: the same rule is enforced on both sides of the OAuth round trip, and three independent copies of it are what let `/\evil.com` through the client while the server was never asked. Predicate only — no exported schema — so the frozen export inventory is unchanged. |
 
 ## AI usage
 

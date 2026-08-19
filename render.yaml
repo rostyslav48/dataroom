@@ -40,5 +40,12 @@ services:
         sync: false
       - key: MAX_UPLOAD_BYTES
         value: "104857600"
+      - key: RATE_LIMIT_PER_MINUTE
+        value: "1200"
+      # Render terminates TLS at its own load balancer, which is one hop. Without this the
+      # throttler sees the balancer's address for every request and all callers share one bucket.
+      # Never `true`: that would trust the whole X-Forwarded-For chain and make it spoofable.
+      - key: TRUST_PROXY_HOPS
+        value: "1"
       - key: WEB_ORIGIN
         sync: false

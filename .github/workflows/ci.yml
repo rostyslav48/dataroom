@@ -86,6 +86,112 @@ jobs:
       - run: pnpm --filter @dataroom/contracts build
       - run: pnpm --filter @dataroom/web test:coverage
 
+  # The one input this repository does not write itself. Everything else is gated per commit; the
+  # dependency graph was not gated at all, against a set of advisories that included a production
+  # open-redirect in the router. `--prod` because a dev-only advisory is a developer-machine
+  # concern, not a shipping one; `--audit-level=high` because that is the bar a build should stop
+  # at. Remaining accepted moderates and their reachability rationale are in README.md.
+  audit:
+    name: dependency audit
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - name: No high or critical advisory in the production graph
+        run: pnpm audit --prod --audit-level=high
+      - name: Full graph, for the record
+        if: always()
+        continue-on-error: true
+        run: pnpm audit
+
+  # SPEC-10's delivery graph. Without this, a regression in cookies, storage CORS, signed redirects
+  # or share revocation merges while CI stays green — every one of those is invisible to a unit
+  # test by construction, because the thing under test is the boundary between two systems.
+  #
+  # Postgres is a service container and both apps are started here, so the browser drives the real
+  # stack. `E2E_STORAGE_READY` is set only when the bucket secret is present: the storage-gated
+  # specs skip with the reason named rather than failing for a missing credential, because a
+  # permanently red suite teaches everyone to ignore it.
+  e2e:
+    name: e2e — browser flows
+    runs-on: ubuntu-latest
+    needs: [quality]
+    services:
+      postgres:
+        image: postgres:15
+        env:
+          POSTGRES_USER: dataroom
+          POSTGRES_PASSWORD: dataroom
+          POSTGRES_DB: dataroom
+        ports: ['5432:5432']
+        options: >-
+          --health-cmd pg_isready --health-interval 5s --health-timeout 5s --health-retries 10
+    env:
+      # One database for the harness and the API both. Pointing them at different databases makes
+      # every login fail in a way that looks exactly like a broken session (QA-F03).
+      DATABASE_URL: postgres://dataroom:dataroom@127.0.0.1:5432/dataroom
+      NODE_ENV: development
+      PORT: '3000'
+      WEB_ORIGIN: http://127.0.0.1:5173
+      VITE_API_URL: http://127.0.0.1:3000
+      VITE_USE_MSW: 'false'
+      E2E_WEB_URL: http://127.0.0.1:5173
+      E2E_API_URL: http://127.0.0.1:3000
+      JWT_ACCESS_SECRET: ci-access-secret-0000000000000000000
+      JWT_REFRESH_SECRET: ci-refresh-secret-000000000000000000
+      COOKIE_SAMESITE: lax
+      COOKIE_SECURE: 'false'
+      GOOGLE_CLIENT_ID: ci-client-id
+      GOOGLE_CLIENT_SECRET: ci-client-secret
+      GOOGLE_CALLBACK_URL: http://127.0.0.1:3000/api/v1/auth/google/callback
+      SUPABASE_URL: ${{ secrets.E2E_SUPABASE_URL || 'https://placeholder.supabase.co' }}
+      SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.E2E_SUPABASE_SERVICE_ROLE_KEY || 'placeholder-key' }}
+      SUPABASE_BUCKET: ${{ secrets.E2E_SUPABASE_BUCKET || 'dataroom' }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm --filter @dataroom/contracts build
+      - run: pnpm --filter @dataroom/e2e exec playwright install --with-deps chromium
+      - run: pnpm db:migrate
+      - run: pnpm db:seed
+      - name: Storage-backed flows run only with a real bucket
+        run: |
+          if [ -n "${{ secrets.E2E_SUPABASE_SERVICE_ROLE_KEY }}" ]; then
+            echo "E2E_STORAGE_READY=true" >> "$GITHUB_ENV"
+          else
+            echo "::warning::No storage credential configured — the storage-gated specs will skip."
+          fi
+      - name: Start the API
+        run: |
+          pnpm --filter @dataroom/api build
+          pnpm --filter @dataroom/api start &
+          npx --yes wait-on http://127.0.0.1:3000/api/v1/health --timeout 90000
+      - name: Start the web app
+        run: |
+          pnpm --filter @dataroom/web build
+          pnpm --filter @dataroom/web exec vite preview --host 127.0.0.1 --port 5173 &
+          npx --yes wait-on http://127.0.0.1:5173 --timeout 90000
+      - run: pnpm test:e2e
+      - name: Keep the traces of whatever failed
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: playwright-artifacts
+          path: |
+            e2e/test-results/
+            e2e/playwright-report/
+          retention-days: 7
+
   build:
     name: build
     runs-on: ubuntu-latest
