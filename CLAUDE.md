@@ -68,7 +68,7 @@ pnpm db:up                                 # Postgres 15 in Docker
 pnpm db:migrate                            # TypeORM CLI, explicit migration list
 pnpm db:seed                               # the canonical fixture tree; idempotent
 pnpm dev:api                               # localhost:3000, /api/v1/health
-VITE_USE_MSW=true pnpm dev:web             # localhost:5173, no backend needed
+pnpm dev:web --host 127.0.0.1              # 127.0.0.1:5173, uses the local API
 
 pnpm test                                  # what CI runs: contracts + api + web, gates enforced
 pnpm test:fast                             # the inner loop — no coverage, no gates
@@ -113,9 +113,6 @@ empty, error and success tests · no stub presented as finished · committed wit
 
 - **`localhost` resolves to `::1` first.** When a published sandbox port "can't be reached", try
   `http://127.0.0.1:<port>` before debugging anything else.
-- **MSW's worker is generated, not committed.** Run
-  `pnpm --filter @dataroom/web exec msw init public/ --no-save` once, or the mocked app boots to a
-  blank page. Without `--no-save`, a clean non-interactive run stops at MSW's package.json prompt.
 - **A warm `node_modules` can hide a broken clean install.** Run `pnpm install --frozen-lockfile`
   when checking setup docs. This exposed undeclared JWT strategy dependencies even though the
   lockfile and installed tree already contained them.

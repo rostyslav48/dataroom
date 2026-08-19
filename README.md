@@ -11,8 +11,8 @@ store; file bytes never pass through the API.
 
 ## Current status
 
-The application code, database migrations, fixture seed, unit/integration/contract/component tests,
-and local MSW experience are implemented. No public deployment URL is published from this checkout.
+The application code, database migrations, fixture seed, and unit/integration/contract/component
+tests are implemented. No public deployment URL is published from this checkout.
 Live Google OAuth, the cross-origin production cookie, and raw browser upload progress still require
 the external Google, Supabase, Render, and Vercel credentials described below.
 
@@ -97,7 +97,7 @@ scripts/              commit ownership validation
 - Node.js 22 recommended (20 or newer is supported)
 - pnpm 9.15.9 through Corepack
 - Docker with Compose for local PostgreSQL and for backend integration tests
-- For the real full stack: a Google OAuth client and a Supabase project with a private Storage bucket
+- A Google OAuth client and a Supabase project with a private Storage bucket
 
 Enable the repository's pinned package manager and install exactly the lockfile:
 
@@ -131,37 +131,7 @@ written in terms of `pnpm`:
 The nested call is looked up on `PATH` like any other command, and `corepack` only ever satisfied
 the outer one. Every root script — `test`, `lint`, `typecheck`, `build`, `db:*` — has this shape.
 
-### Option A: run the frontend with MSW, no accounts or backend
-
-This is the fastest way to inspect the complete UI and its mutable fixture tree:
-
-```bash
-pnpm --filter @dataroom/web exec msw init public/ --no-save
-VITE_USE_MSW=true pnpm dev:web --host 127.0.0.1 --strictPort
-```
-
-Open `http://127.0.0.1:5173`. The generated service-worker file is intentionally untracked and must
-be created once per clean clone. MSW is development-only and the production build is checked to make
-sure it contains neither the worker nor the mock handlers.
-
-Two details in that command, both of which have already cost someone an afternoon:
-
-- **`--host 127.0.0.1` is not optional.** Left to itself Vite prints `http://localhost:5173/` and
-  listens on `[::1]` only, so the IPv4 address above refuses the connection while the server insists
-  it is running. `--strictPort` then makes a port clash fail loudly instead of silently moving to
-  5174 and leaving you refreshing the wrong tab.
-- **Do not write `pnpm dev:web -- --host 127.0.0.1`.** The `--` separator is passed through to Vite,
-  which stops parsing options at it and ignores every flag that follows — the server starts, the
-  flags are dropped, and the failure looks exactly like the one above.
-
-These instructions were last re-run end to end on 2026-08-19, from a `git clone --no-hardlinks` of
-this repository into an empty directory, in a shell with no `pnpm` on `PATH`: Corepack shim, frozen
-install, contracts build, `msw init`, Vite bound to `127.0.0.1`, then `curl` against both
-`http://127.0.0.1:5173` and `http://127.0.0.1:5173/mockServiceWorker.js`, and finally a headless
-browser confirming the fixture room renders. Following instructions is the only way to know they
-work; believing them is not.
-
-### Option B: run the real local stack
+### Run the local stack
 
 Copy the complete environment template:
 
@@ -197,8 +167,18 @@ pnpm dev:api
 ```
 
 ```bash
-VITE_API_URL=http://127.0.0.1:3000 VITE_USE_MSW=false pnpm dev:web --host 127.0.0.1 --strictPort
+VITE_API_URL=http://127.0.0.1:3000 pnpm dev:web --host 127.0.0.1 --strictPort
 ```
+
+Two details in that command, both of which have already cost someone an afternoon:
+
+- **`--host 127.0.0.1` is not optional.** Left to itself Vite prints `http://localhost:5173/` and
+  listens on `[::1]` only, so the IPv4 address above refuses the connection while the server insists
+  it is running. `--strictPort` then makes a port clash fail loudly instead of silently moving to
+  5174 and leaving you refreshing the wrong tab.
+- **Do not write `pnpm dev:web -- --host 127.0.0.1`.** The `--` separator is passed through to Vite,
+  which stops parsing options at it and ignores every flag that follows — the server starts, the
+  flags are dropped, and the failure looks exactly like the one above.
 
 **Use one host everywhere — `127.0.0.1` here, since that is what the URLs below say.** CORS is an
 exact-origin match with credentials, so an API started with `WEB_ORIGIN=http://localhost:5173` while
