@@ -18,23 +18,16 @@ import type { Page } from '@playwright/test';
  * to catch.
  */
 /**
- * `staleTime` in `apps/web/src/lib/queryClient.ts`. TanStack Query's `refetchOnWindowFocus` fires
- * only for a query it already considers **stale**, so a refocus one second after the delete finds
- * fresh data and does nothing at all — the viewer keeps looking at a folder that no longer exists
- * until the window elapses. Waiting it out is what makes this test exercise the refetch instead of
- * silently proving that refocusing does nothing.
+ * No wait before the refocus, and that is now the point.
  *
- * The user-visible consequence is worth stating plainly, because the test now hides it: a viewer
- * who tabs back within ten seconds of the deletion still sees the stale listing. Any click then
- * fails correctly, and the screen catches up on the next focus. `refetchOnWindowFocus: 'always'`
- * would close that window; that is a frontend decision, and it is recorded as a follow-up rather
- * than made here.
+ * This helper used to sit out a 10.5-second `staleTime` window first, because
+ * `refetchOnWindowFocus` skips a query TanStack Query still considers fresh — so a refocus straight
+ * after the deletion did nothing, and flow 5 was asserting on the far side of a gap the register
+ * says must not exist. QA pinned the gap; the node queries now carry `staleTime: 0`
+ * (`useNodeQueries.ts`), so the refetch happens on the first refocus and the wait would only hide
+ * a regression.
  */
-const QUERY_STALE_WINDOW_MS = 10_000;
-
 export async function simulateRefocus(page: Page): Promise<void> {
-  await page.waitForTimeout(QUERY_STALE_WINDOW_MS + 500);
-
   const other = await page.context().newPage();
   try {
     await other.goto('about:blank');

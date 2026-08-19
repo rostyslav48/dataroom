@@ -2,33 +2,38 @@ import { expect, openAnonymous, routes, test, tokenFromShareUrl } from '../suppo
 import { gotoShared } from '../support/shared-route';
 
 /**
- * A QA finding, pinned as a test.
+ * A QA finding, fixed — and this spec inverted to keep it fixed.
+ *
+ * ## What was found
  *
  * `ProjectDesc/06-edge-cases.md` decides the "delete a folder someone is currently viewing" case
  * outright: *"viewer's next request (or focus-refetch) gets `410 ITEM_GONE` → `ShareGoneState` …
- * **Never a blank screen or a stale cache.**"* `queryClient.ts` sets `staleTime: 10_000` with
- * `refetchOnWindowFocus: true`, and TanStack Query skips a focus refetch entirely while the data
- * is still fresh — so for the first ten seconds after the deletion a refocus does nothing at all
- * and the viewer keeps reading a listing of a folder that no longer exists.
+ * **Never a blank screen or a stale cache.**"* `queryClient.ts` set `staleTime: 10_000` with
+ * `refetchOnWindowFocus: true`, and TanStack Query skips a focus refetch entirely while the data is
+ * still fresh — so for the first ten seconds after the deletion a refocus did nothing at all and the
+ * viewer kept reading a listing of a folder that no longer existed.
  *
- * Flow 5 does not catch this: `simulateRefocus` sits out the whole window before dispatching, so
- * every assertion there is made on the far side of it. That is the honest way to test the refetch
- * itself, but it leaves the window untested and invisible.
+ * Flow 5 did not catch it: `simulateRefocus` sat out the whole window before dispatching, so every
+ * assertion there was made on the far side of the gap. QA wrote this spec asserting the behaviour
+ * that shipped, deliberately, so that a fix would arrive as a failing test somebody had to update
+ * rather than as a silent divergence — and left the instruction: *if this test fails, the defect was
+ * fixed: invert it.*
  *
- * This spec asserts the behaviour that ships **today**, deliberately, rather than the behaviour the
- * register promises — the same choice `00-harness.spec.ts` makes for the CCP-6 refresh grace
- * window. Pinning it means a fix (`refetchOnWindowFocus: 'always'`, or a shorter `staleTime` for
- * node queries) arrives as a failing test somebody must consciously update, instead of as a silent
- * difference between the register and the system. **If this test fails, the defect was fixed:
- * invert it.**
+ * ## What changed
+ *
+ * `useNodeDetail` and `useChildren` now carry `staleTime: 0`, so a refocus refetches immediately.
+ * The window is gone, and this spec asserts its absence: the same refocus that used to be a no-op
+ * inside ten seconds must now produce the gone state. `simulateRefocus` no longer waits, either, so
+ * flow 5 exercises the same path rather than stepping around it.
+ *
+ * The narrow scope matters and is asserted below: the fix is on the node reads only. `/shared/:token`
+ * is rate-limited to 10 requests a minute per IP, and refetching *that* on every focus would spend
+ * the budget on a value that does not change.
  *
  * Track: qa
  */
 
-/** `staleTime` in `apps/web/src/lib/queryClient.ts`. */
-const QUERY_STALE_WINDOW_MS = 10_000;
-
-/** The refocus `support/focus.ts` performs, without its `staleTime` wait. */
+/** The refocus `support/focus.ts` performs — inlined so this spec keeps testing it directly. */
 async function refocusNow(page: import('@playwright/test').Page): Promise<void> {
   const other = await page.context().newPage();
   try {
@@ -47,15 +52,12 @@ async function refocusNow(page: import('@playwright/test').Page): Promise<void> 
   });
 }
 
-test.describe('QA finding — the staleTime window swallows the focus refetch', () => {
-  test('a viewer who tabs back inside staleTime still sees the deleted folder', async ({
+test.describe('the staleTime window that swallowed the focus refetch is closed', () => {
+  test('a viewer who tabs back immediately gets the gone state, with no window to wait out', async ({
     browser,
     ownerApi,
     scratch,
   }) => {
-    // The wait below outlasts the default 60s budget once the shared-route limiter is involved.
-    test.setTimeout(120_000);
-
     const shareRoot = await ownerApi.createFolder(scratch.folder.id, 'Stale Window Root');
     const doomed = await ownerApi.createFolder(shareRoot.id, 'Doomed In Window');
     await ownerApi.createFolder(doomed.id, 'Child Of Doomed');
@@ -70,26 +72,53 @@ test.describe('QA finding — the staleTime window swallows the focus refetch', 
 
       await ownerApi.remove(doomed.id);
 
-      // ── inside the window: the refocus is a no-op ──────────────────────
+      // No wait of any kind between the deletion and the refocus. This is the assertion the
+      // register's "never a stale cache" actually amounts to, and the one that used to fail.
       await refocusNow(viewer.page);
 
-      // The listing is served from a cache TanStack Query still considers fresh. This is the
-      // outcome the register rules out; it is asserted here so the gap is visible rather than
-      // waited out.
       await expect(
-        viewer.ui.rowByName('Child Of Doomed'),
-        'inside staleTime the deleted folder is still on screen — see the note at the top',
-      ).toBeVisible({ timeout: 3_000 });
-      await expect(viewer.ui.state.itemGone).toHaveCount(0);
-
-      // ── outside the window: the same refocus works ─────────────────────
-      // Proves the difference is the freshness window and nothing else about the harness: the
-      // events dispatched are identical, only the elapsed time changed.
-      await viewer.page.waitForTimeout(QUERY_STALE_WINDOW_MS + 500);
-      await refocusNow(viewer.page);
-
-      await expect(viewer.ui.state.itemGone).toBeVisible({ timeout: 15_000 });
+        viewer.ui.state.itemGone,
+        'a refocus straight after the deletion must refetch — see the note at the top',
+      ).toBeVisible({ timeout: 10_000 });
       await expect(viewer.ui.rowByName('Child Of Doomed')).toHaveCount(0);
+    } finally {
+      await viewer.context.close();
+    }
+  });
+
+  test('the share resolve is still cached, so refocusing does not spend the rate limit', async ({
+    browser,
+    ownerApi,
+    scratch,
+  }) => {
+    const shareRoot = await ownerApi.createFolder(scratch.folder.id, 'Quota Root');
+    await ownerApi.createFolder(shareRoot.id, 'Contents');
+    const share = await ownerApi.createPublicLink(shareRoot.id);
+    const token = tokenFromShareUrl(share.url);
+
+    const viewer = await openAnonymous(browser);
+    const resolves: string[] = [];
+    viewer.page.on('request', (request) => {
+      if (request.url().includes('/shared/')) resolves.push(request.url());
+    });
+
+    try {
+      await gotoShared(viewer.page, routes.sharedEntry(token));
+      await expect(viewer.ui.rowByName('Contents')).toBeVisible();
+      const afterLoad = resolves.length;
+
+      // Four refocuses in quick succession. The node queries refetch every time — that is the fix
+      // above — while the token resolve stays inside its own freshness window. If this ever starts
+      // failing, the whole suite is about to become flaky against the 10/min/IP limiter, and the
+      // shared routes will start rate-limiting real users who alt-tab.
+      for (let i = 0; i < 4; i += 1) await refocusNow(viewer.page);
+      await viewer.page.waitForTimeout(500);
+
+      expect(
+        resolves.length - afterLoad,
+        'refocusing must not re-resolve the share token',
+      ).toBe(0);
+      await expect(viewer.ui.rowByName('Contents')).toBeVisible();
     } finally {
       await viewer.context.close();
     }
