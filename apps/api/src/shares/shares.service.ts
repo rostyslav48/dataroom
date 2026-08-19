@@ -83,6 +83,7 @@ export class SharesService {
         [nodeId],
       );
       if (!node) throw errors.itemGone();
+      await this.rejectOwnAddress(manager, node.dataRoomId, recipientEmails);
 
       const existing = await this.findIdenticalLiveShare(
         manager,
@@ -132,9 +133,12 @@ export class SharesService {
     const emails = uniqueSorted(input.emails);
 
     await this.dataSource.transaction(async (manager) => {
-      const [share] = await selectRows<{ type: 'public_link' | 'permissioned' }>(
+      const [share] = await selectRows<{
+        type: 'public_link' | 'permissioned';
+        dataRoomId: string;
+      }>(
         manager,
-        `SELECT type FROM shares WHERE id = $1 FOR UPDATE`,
+        `SELECT type, data_room_id AS "dataRoomId" FROM shares WHERE id = $1 FOR UPDATE`,
         [shareId],
       );
       if (!share) throw errors.notFound();
@@ -143,6 +147,7 @@ export class SharesService {
           emails: ['Recipients can only be added to a permissioned share.'],
         });
       }
+      await this.rejectOwnAddress(manager, share.dataRoomId, emails);
 
       for (const email of emails) {
         await manager.query(
@@ -222,6 +227,40 @@ export class SharesService {
       expiresAt: row.expiresAt?.toISOString() ?? null,
       ownerName: row.ownerName,
     };
+  }
+
+  /**
+   * The room's owner reads every node in it through ownership, so a recipient row for their own
+   * address grants nothing. Left in, it shows the owner to themselves as a stranger on the share
+   * and survives a revoke, which reads as a live grant that cannot be taken away.
+   *
+   * This is a validity rule about the recipient list, not an access decision: who may call this
+   * endpoint at all is still `OwnerGuard`'s answer alone.
+   */
+  private async rejectOwnAddress(
+    source: Queryable,
+    dataRoomId: string,
+    emails: string[],
+  ): Promise<void> {
+    if (emails.length === 0) return;
+
+    const [owner] = await selectRows<{ email: string }>(
+      source,
+      `SELECT u.email::text AS email
+         FROM data_rooms d
+         JOIN users u ON u.id = d.owner_id
+        WHERE d.id = $1`,
+      [dataRoomId],
+    );
+    if (!owner) throw errors.internal();
+
+    // `Email` lowercases on the way in and `users.email` is citext, so compare case-insensitively
+    // rather than letting the column type decide.
+    if (emails.some((email) => email.toLowerCase() === owner.email.toLowerCase())) {
+      throw errors.validationFailed({
+        emails: ['You already have access to this as its owner, so you cannot invite yourself.'],
+      });
+    }
   }
 
   private async findIdenticalLiveShare(

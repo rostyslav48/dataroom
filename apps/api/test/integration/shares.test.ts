@@ -107,6 +107,24 @@ describe('shares', () => {
       );
     });
 
+    it("rejects the owner's own address and mints no share at all", async () => {
+      const response = await request(httpServer(harness))
+        .post(url(endpoints.shares.create.path, { id: seeded.q3Id }))
+        .set(await harness.authHeader(owner))
+        .send({ type: 'permissioned', recipients: [fixtures.users.owner.email] })
+        .expect(400);
+
+      const error = ApiError.parse(response.body);
+      expect(error.code).toBe('VALIDATION_FAILED');
+      expect(error.details?.emails?.[0]).toMatch(/cannot invite yourself/);
+
+      const rows: Array<{ count: string }> = await harness.dataSource.query(
+        `SELECT count(*)::text AS count FROM shares WHERE node_id = $1`,
+        [seeded.q3Id],
+      );
+      expect(rows[0]?.count).toBe('0');
+    });
+
     it('returns an identical live public link instead of minting another token', async () => {
       const endpoint = url(endpoints.shares.create.path, { id: seeded.q3Id });
       const first = await request(httpServer(harness))
@@ -331,6 +349,26 @@ describe('shares', () => {
       const share = ShareDto.parse(response.body);
       expect(share.recipients).toHaveLength(1);
       expect(share.recipients[0]).toMatchObject({ id: recipientId, revokedAt: null });
+    });
+
+    it("rejects the owner's own address and adds nobody from that batch", async () => {
+      const response = await request(httpServer(harness))
+        .post(url(endpoints.shares.addRecipients.path, { id: seeded.permissionedShareId }))
+        .set(await harness.authHeader(owner))
+        .send({ emails: ['someone@example.com', fixtures.users.owner.email.toUpperCase()] })
+        .expect(400);
+
+      const error = ApiError.parse(response.body);
+      expect(error.code).toBe('VALIDATION_FAILED');
+      expect(error.details?.emails?.[0]).toMatch(/cannot invite yourself/);
+
+      // The whole batch is refused: a partial add would report success for an invitation the
+      // owner never got, with no way to tell which half landed.
+      const rows: Array<{ count: string }> = await harness.dataSource.query(
+        `SELECT count(*)::text AS count FROM share_recipients WHERE share_id = $1`,
+        [seeded.permissionedShareId],
+      );
+      expect(rows[0]?.count).toBe('1');
     });
 
     it('rejects recipients on a public link without changing it', async () => {
