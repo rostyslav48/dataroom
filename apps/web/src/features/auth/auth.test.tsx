@@ -182,17 +182,27 @@ describe('LoginPage', () => {
     expect(screen.getByText(/private workspace for sharing due-diligence documents/i)).toBeInTheDocument();
   });
 
-  it('starts the OAuth redirect carrying the returnTo it was given', async () => {
+  it('keeps a shared-path bearer token out of the OAuth redirect', async () => {
     state.currentUserId = null;
+    const shareToken = 'sharetoken0123456789abcdef0123456789abcdef';
     renderWithProviders(
       <AuthProvider>
         <LoginPage />
       </AuthProvider>,
-      { route: '/login?returnTo=%2Frooms%2Fr1' },
+      { route: `/login?returnTo=${encodeURIComponent(`/s/${shareToken}/file/n1`)}` },
     );
     await userEvent.click(await screen.findByRole('button', { name: 'Continue with Google' }));
-    expect(assignLocation).toHaveBeenCalledWith(
-      expect.stringContaining('/auth/google?returnTo=%2Frooms%2Fr1'),
+
+    expect(assignLocation).toHaveBeenCalledOnce();
+    const redirect = vi.mocked(assignLocation).mock.calls[0]?.[0];
+    expect(redirect).toBeDefined();
+    expect(redirect).not.toContain(shareToken);
+
+    const returnTo = new URL(redirect ?? 'http://localhost').searchParams.get('returnTo');
+    expect(returnTo).toMatch(/^\/resume\/[0-9a-f]{32}$/);
+    const key = returnTo?.slice('/resume/'.length);
+    expect(window.sessionStorage.getItem(`dataroom.returnTo.${key ?? ''}`)).toBe(
+      `/s/${shareToken}/file/n1`,
     );
   });
 
@@ -205,7 +215,7 @@ describe('LoginPage', () => {
       { route: '/login?returnTo=https%3A%2F%2Fevil.example.com' },
     );
     await userEvent.click(await screen.findByRole('button', { name: 'Continue with Google' }));
-    expect(assignLocation).toHaveBeenCalledWith(expect.stringContaining('returnTo=%2Frooms'));
+    expect(assignLocation).toHaveBeenCalledWith(expect.stringContaining('returnTo=%2Fresume%2F'));
     expect(assignLocation).not.toHaveBeenCalledWith(expect.stringContaining('evil.example.com'));
   });
 

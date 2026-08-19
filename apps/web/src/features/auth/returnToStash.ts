@@ -34,9 +34,8 @@ const randomKey = (): string => {
 /**
  * Stashes `path` and returns the `returnTo` to send through OAuth in its place.
  *
- * Falls back to sending the path itself when `sessionStorage` is unavailable — a private-mode
- * browser or a storage-partitioned iframe — because losing the destination entirely is a worse
- * outcome than the disclosure this avoids, and the value is validated either way.
+ * Falls back to the rooms list when `sessionStorage` is unavailable. Losing the destination is
+ * preferable to handing a share-token bearer capability to Google through OAuth `state`.
  */
 export function stashReturnTo(path: string): string {
   if (!isSafeReturnTo(path)) return '/rooms';
@@ -45,7 +44,7 @@ export function stashReturnTo(path: string): string {
     window.sessionStorage.setItem(`${KEY_PREFIX}${key}`, path);
     return `${RESUME_PATH}/${key}`;
   } catch {
-    return path;
+    return '/rooms';
   }
 }
 

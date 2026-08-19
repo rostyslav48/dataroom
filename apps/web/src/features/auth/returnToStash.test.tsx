@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { render, screen } from '@testing-library/react';
 import { MemoryRouter, Route, Routes } from 'react-router-dom';
 import { ResumePage } from './ResumePage';
@@ -63,6 +63,15 @@ describe('returnTo stash', () => {
     stashReturnTo('/rooms/r1');
     expect(window.sessionStorage.length).toBe(1);
     expect(window.sessionStorage.key(0)).toMatch(/^dataroom\.returnTo\./);
+  });
+
+  it('drops the destination rather than disclosing it when storage is unavailable', () => {
+    const setItem = vi.spyOn(Storage.prototype, 'setItem').mockImplementation(() => {
+      throw new Error('storage unavailable');
+    });
+
+    expect(stashReturnTo('/s/bearer-token/file/n1')).toBe('/rooms');
+    setItem.mockRestore();
   });
 });
 

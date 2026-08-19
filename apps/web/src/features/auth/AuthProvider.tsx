@@ -6,13 +6,14 @@ import { setSessionExpiredHandler } from '@/lib/api';
 import { tokenStore } from '@/lib/tokenStore';
 import { qk } from '@/lib/queryKeys';
 import { assignLocation } from '@/lib/browser';
+import { stashReturnTo } from './returnToStash';
 
 export type AuthStatus = 'loading' | 'authenticated' | 'unauthenticated';
 
 export interface AuthContextValue {
   status: AuthStatus;
   user: UserDto | null;
-  /** Leaves the SPA for Google, carrying the path to come back to. */
+  /** Leaves the SPA for Google while preserving the path to come back to. */
   signIn: (returnTo?: string) => void;
   signOut: () => Promise<void>;
 }
@@ -54,7 +55,8 @@ export function AuthProvider({ children }: AuthProviderProps): JSX.Element {
 
   const signIn = useCallback((returnTo?: string) => {
     setSessionEnded(false);
-    assignLocation(googleSignInUrl(returnTo));
+    const destination = returnTo === undefined ? undefined : stashReturnTo(returnTo);
+    assignLocation(googleSignInUrl(destination));
   }, []);
 
   const signOut = useCallback(async () => {

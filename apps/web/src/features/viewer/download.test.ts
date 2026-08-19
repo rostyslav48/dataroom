@@ -27,6 +27,10 @@ describe('downloadNode', () => {
         [SHARE_TOKEN_HEADER]: 'share-token',
       },
     });
-    expect(saveBlob).toHaveBeenCalledWith(expect.any(Blob), 'report.pdf');
+    expect(saveBlob).toHaveBeenCalledOnce();
+    const [blob, filename] = vi.mocked(saveBlob).mock.calls[0]!;
+    expect(filename).toBe('report.pdf');
+    expect(blob.size).toBe(10);
+    expect(await blob.text()).toBe('file bytes');
   });
 });
