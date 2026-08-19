@@ -120,13 +120,40 @@ empty, error and success tests · no stub presented as finished · committed wit
   when checking setup docs. This exposed undeclared JWT strategy dependencies even though the
   lockfile and installed tree already contained them.
 - **A validation-pipe presence check does not prove contract identity.** A controller can attach a
-  widened local Zod schema and still satisfy “has `ZodValidationPipe`.” Route contract tests must
-  compare the pipe's exact schema with the frozen endpoint request schema.
+  widened local Zod schema and still satisfy “has `ZodValidationPipe`.” Route contract tests
+  compare the pipe's schema with the frozen one **by reference**, not by shape: `CreateDataRoomBody`,
+  `UpdateDataRoomBody` and `RenameNodeBody` are all `z.object({ name: ResourceName }).strict()`, so a
+  structural check cannot tell three endpoints' schemas apart.
+- **A contract can contradict itself, and then one half of it is unreachable.** The frozen error
+  taxonomy defined `UNSUPPORTED_TYPE` as “415 — mime type not in the allowlist” while the request
+  schema validated the mime against that same allowlist, which at the boundary makes the code
+  impossible to produce. When code and contract disagree, check whether the contract agrees with
+  *itself* before assuming the code is wrong (CCP-8).
 - **`corepack pnpm` does not make nested bare `pnpm` commands available.** Root package scripts call
   `pnpm` internally, so a locked-down shell needs a Corepack shim directory added to `PATH` before
-  those scripts run.
+  those scripts run: `corepack enable --install-directory "$(mktemp -d)"`, then prepend it.
 - **A URL in setup docs must match the dev server bind address.** If the instructions say
   `127.0.0.1`, pass `--host 127.0.0.1`; a Vite listener on `localhost` may bind only IPv6.
+- **`pnpm run <script> -- --flag` does not forward the flag.** The `--` reaches Vite, which stops
+  parsing options there and silently ignores everything after it. Write
+  `pnpm dev:web --host 127.0.0.1`, with no separator.
+- **An origin mismatch renders the signed-out page, not an error.** CORS is an exact origin with
+  credentials and the refresh cookie is host-only, so serving the app on `127.0.0.1:5173` while
+  `WEB_ORIGIN` says `localhost:5173` makes every request fail in a way that looks exactly like an
+  expired session. One host, everywhere.
+- **A "predicted" selector map is not test coverage.** `e2e/`'s locators were written from the specs
+  before the UI existed and had never been run: almost none of the `data-testid`s they expected were
+  ever added, and twenty tests had therefore never passed or failed. A suite nobody has executed is
+  a document, not a test.
+- **`new Event('visibilitychange')` does not bubble**, so dispatching it on `document` never reaches
+  TanStack Query's listener on `window`, and `refetchOnWindowFocus` quietly does nothing. The same
+  refetch is also skipped while data is still inside `staleTime` (10 s here) — a "refocus" test that
+  does neither passes against a page nothing ever asked to update.
+- **A row's text is not its name.** Every node row renders a modified date, so filtering rows by
+  `hasText: '2026'` matched a folder named `2026` *and* all of its siblings. Address the name cell.
+- **The public-link limiter is real in tests too**: `/shared/:token` allows 10 requests a minute per
+  IP, and a whole Playwright run shares one IP. A test that trips it reports `RATE_LIMITED` while
+  asserting something else entirely.
 - **`pkill -f vite` matches its own shell** and kills your background server with it. Use the
   harness's background runner, or a pattern that cannot self-match.
 - Per-track traps live in `apps/api/CLAUDE.md` and `apps/web/CLAUDE.md`. Read the one for your
