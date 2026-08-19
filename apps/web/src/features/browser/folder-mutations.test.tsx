@@ -121,6 +121,36 @@ describe('inline rename', () => {
     expect(screen.getByDisplayValue('Financials')).toBeInTheDocument();
   });
 
+  /**
+   * The rollback must not eat the typing.
+   *
+   * A rename is optimistic, so a rejected one writes the new name into the cache and then puts the
+   * old one back — two `node.name` changes arriving while the field is still open. The cell used to
+   * reseed its draft from each of them, so `NAME_CONFLICT` cleared the field SPEC-07 says it keeps.
+   * The assertion above this one sampled the value before the rollback's re-render landed and so
+   * passed against the bug; this one waits for the cache to settle first, and pins the retry too.
+   */
+  it('keeps the typed name through the optimistic rollback, and lets a second attempt commit', async () => {
+    renderFolder();
+    await startRename('Legal');
+
+    const input = screen.getByLabelText('Rename Legal');
+    await userEvent.clear(input);
+    await userEvent.type(input, 'Financials{Enter}');
+
+    await screen.findByRole('alert');
+    await waitFor(() => {
+      expect(childrenOf(IDS.rootNode).map((node) => node.name)).toContain('Legal');
+    });
+    expect(screen.getByLabelText('Rename Legal')).toHaveValue('Financials');
+
+    // A rejected commit has to stay retryable: the double-commit guard must be released, or the
+    // field sits open with the text intact and every further Enter is swallowed.
+    await userEvent.clear(screen.getByLabelText('Rename Legal'));
+    await userEvent.type(screen.getByLabelText('Rename Legal'), 'Contracts{Enter}');
+    expect(await screen.findByRole('button', { name: 'Contracts' })).toBeInTheDocument();
+  });
+
   it('rolls the optimistic name back when the server rejects it', async () => {
     renderFolder();
     await startRename('Legal');
