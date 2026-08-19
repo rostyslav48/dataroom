@@ -11,7 +11,7 @@ spec gap worth raising, not something to reverse-engineer. The single exception 
 ```
 src/
   lib/         api.ts (fetch + Zod + single-flight refresh), queryKeys, errorMap, queryClient
-  mocks/       MSW handlers + a mutable in-memory tree, built from @dataroom/contracts fixtures
+  mocks/       test-only MSW handlers + mutable fixtures built from @dataroom/contracts
   components/  ui/ (primitives), layout/ (AppShell, TopBar, Sidebar)
   features/    auth · rooms · browser · uploads · viewer · shares
   routes/      route table; layout is chosen from the response, never from the URL
@@ -51,11 +51,6 @@ lose it.
 
 ## Traps, every one of which has already bitten
 
-- **MSW's worker is generated, not committed**: `pnpm exec msw init public/` once, or the mocked app
-  boots blank. It is gitignored deliberately — Vite copies `public/` into `dist`, and CI greps
-  `dist` to prove MSW never reaches production.
-- **The MSW import must stay inside `import.meta.env.DEV`.** Vite replaces that literal with `false`
-  in a production build and Rollup drops the branch. Move it out and MSW ships to users.
 - **Radix's toast needs pointer-capture APIs jsdom lacks** and makes the suite exit non-zero. The
   toast here is hand-rolled for that reason; `@radix-ui/react-toast` is currently an unused
   dependency. Dialogs, menus, tabs and tooltips do use Radix and work fine.
