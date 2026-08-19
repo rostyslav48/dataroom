@@ -139,7 +139,6 @@ jobs:
       PORT: '3000'
       WEB_ORIGIN: http://127.0.0.1:5173
       VITE_API_URL: http://127.0.0.1:3000
-      VITE_USE_MSW: 'false'
       E2E_WEB_URL: http://127.0.0.1:5173
       E2E_API_URL: http://127.0.0.1:3000
       JWT_ACCESS_SECRET: ci-access-secret-0000000000000000000
