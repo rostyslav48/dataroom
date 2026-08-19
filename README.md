@@ -9,21 +9,6 @@ The workspace contains a React 18/Vite client, a NestJS 10 API, PostgreSQL 15 vi
 Zod contract package, and Playwright end-to-end tests. Supabase Storage is the production object
 store; file bytes never pass through the API.
 
-## Current status
-
-The application code, database migrations, fixture seed, and unit/integration/contract/component
-tests are implemented. No public deployment URL is published from this checkout.
-Live Google OAuth, the cross-origin production cookie, and raw browser upload progress still require
-the external Google, Supabase, Render, and Vercel credentials described below.
-
-The findings of the 19 August security review and QA audit have been remediated in this checkout —
-see **Security posture** below for what each control now is, and its **Accepted exceptions** table
-for the three that were deliberately left standing with reasons.
-
-Refresh-token reuse has a 15-second browser-tab race window, but a second presenter receives the
-exact successor already issued rather than a new credential. See the deviations register for the
-single-instance limitation and fail-closed behavior.
-
 ## What is implemented
 
 - Google OAuth with short-lived access JWTs and rotating, hashed refresh tokens in an `httpOnly`
@@ -92,75 +77,30 @@ scripts/              commit ownership validation
 
 ## Local setup
 
-### Prerequisites
+Requires Node.js 20+ (22 recommended), Docker Compose, a Google OAuth client, and a Supabase
+project with a private Storage bucket.
 
-- Node.js 22 recommended (20 or newer is supported)
-- pnpm 9.15.9 through Corepack
-- Docker with Compose for local PostgreSQL and for backend integration tests
-- A Google OAuth client and a Supabase project with a private Storage bucket
-
-Enable the repository's pinned package manager and install exactly the lockfile:
+Install the pinned dependencies and create the local environment file:
 
 ```bash
 corepack enable pnpm
 pnpm install --frozen-lockfile
 pnpm --filter @dataroom/contracts build
-```
-
-**If `corepack enable` cannot write to the Node bin directory** — a locked-down shell, or a
-system-managed Node — put a Corepack shim in a directory you own and keep it on `PATH` for
-everything that follows:
-
-```bash
-pnpm_shim=$(mktemp -d)
-corepack enable --install-directory "$pnpm_shim"
-export PATH="$pnpm_shim:$PATH"
-
-pnpm install --frozen-lockfile
-pnpm --filter @dataroom/contracts build
-```
-
-Prefixing individual commands with `corepack` is **not** enough. `corepack pnpm install` works, but
-`corepack pnpm test` fails with `sh: 1: pnpm: not found`, because the root scripts are themselves
-written in terms of `pnpm`:
-
-```
-> pnpm --filter @dataroom/contracts test && pnpm --filter @dataroom/api test:coverage && …
-```
-
-The nested call is looked up on `PATH` like any other command, and `corepack` only ever satisfied
-the outer one. Every root script — `test`, `lint`, `typecheck`, `build`, `db:*` — has this shape.
-
-### Run the local stack
-
-Copy the complete environment template:
-
-```bash
 cp .env.example .env
 ```
 
-Replace every empty or placeholder value in `.env`:
+In `.env`, set `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET`, `SUPABASE_URL`, and
+`SUPABASE_SERVICE_ROLE_KEY`; change `SUPABASE_BUCKET` only if the private bucket is not named
+`dataroom`. Keep the supplied local database, origin, and cookie settings. Register this exact
+Google callback: `http://127.0.0.1:3000/api/v1/auth/google/callback`.
 
-- Create a Google OAuth consent screen using `openid`, `email`, and `profile`, then register the
-  callback **exactly** as `GOOGLE_CALLBACK_URL` spells it —
-  `http://127.0.0.1:3000/api/v1/auth/google/callback`. Google treats `localhost` and `127.0.0.1` as
-  different redirect URIs; register both if you intend to use both.
-- Create a **private** Supabase Storage bucket matching `SUPABASE_BUCKET`. Put the Supabase URL and
-  service-role key only in the API environment; never expose the key through a `VITE_` variable.
-- Generate distinct access and refresh secrets, for example with `openssl rand -base64 48` twice.
-- Keep local cookies at `COOKIE_SAMESITE=lax` and `COOKIE_SECURE=false`.
-
-The API reads the repo-root `.env` and exits before listening if a required value is missing or
-invalid. Start and prepare PostgreSQL:
+Prepare PostgreSQL:
 
 ```bash
-pnpm db:up
-pnpm db:migrate
-pnpm db:seed
+pnpm db:up && pnpm db:migrate && pnpm db:seed
 ```
 
-The seed is repeatable: it rebuilds only the canonical fixture room and preserves unrelated rooms.
-Then run the two applications in separate terminals:
+Start the API and web app in separate terminals:
 
 ```bash
 pnpm dev:api
@@ -170,33 +110,16 @@ pnpm dev:api
 VITE_API_URL=http://127.0.0.1:3000 pnpm dev:web --host 127.0.0.1 --strictPort
 ```
 
-Two details in that command, both of which have already cost someone an afternoon:
+Open the web app at `http://127.0.0.1:5173`; API health is
+`http://127.0.0.1:3000/api/v1/health`. Keep `127.0.0.1` everywhere—mixing it with `localhost`
+breaks credentialed CORS and the host-only refresh cookie. Pass Vite flags exactly as shown, without
+an extra `--` separator.
 
-- **`--host 127.0.0.1` is not optional.** Left to itself Vite prints `http://localhost:5173/` and
-  listens on `[::1]` only, so the IPv4 address above refuses the connection while the server insists
-  it is running. `--strictPort` then makes a port clash fail loudly instead of silently moving to
-  5174 and leaving you refreshing the wrong tab.
-- **Do not write `pnpm dev:web -- --host 127.0.0.1`.** The `--` separator is passed through to Vite,
-  which stops parsing options at it and ignores every flag that follows — the server starts, the
-  flags are dropped, and the failure looks exactly like the one above.
-
-**Use one host everywhere — `127.0.0.1` here, since that is what the URLs below say.** CORS is an
-exact-origin match with credentials, so an API started with `WEB_ORIGIN=http://localhost:5173` while
-the browser is on `http://127.0.0.1:5173` rejects every request the app makes. What you see then is
-not an error page: the app renders its signed-out landing screen, exactly as if the session had
-expired. `.env.example` ships `127.0.0.1` for that reason, and the refresh cookie is host-only, so
-mixing the two hosts breaks the session for the same reason twice.
-
-Useful checks:
-
-- Web: `http://127.0.0.1:5173`
-- API health: `http://127.0.0.1:3000/api/v1/health`
-- Google sign-in starts at `http://127.0.0.1:3000/api/v1/auth/google`
+If `corepack enable` cannot write to the Node installation, create a writable Corepack shim directory,
+add it to `PATH`, and rerun the install; root scripts invoke bare `pnpm` internally.
 
 The real-browser raw `PUT` path to a Supabase signed upload URL remains an external verification item.
-Before relying on uploads in a deployment, confirm the bucket's CORS behavior and that
-`xhr.upload.onprogress` fires for a representative file. If Supabase does not support this exact path,
-the fallback is resumable/TUS or presigned S3 and requires an API-contract change.
+Before deploying, confirm the bucket's CORS behavior and `xhr.upload.onprogress` with a real file.
 
 ## Verification
 
@@ -244,11 +167,9 @@ the public share endpoint's per-IP rate limit. It keys the process lock by `E2E_
 aliases reach the same target, give both runs the same `E2E_SHARE_LOCK_KEY`. Distributed CI runners
 still need the CI provider's concurrency control because a host-local lock cannot cross machines.
 
-44 tests. Against a local stack, **40 pass and 4 skip**. The four are the flows that move bytes:
-`POST /uploads/init` mints a signed upload URL before it answers, so without a real Supabase bucket
-they fail on a 500 that says nothing about the behaviour under test. They are gated rather than left
-red — set `E2E_STORAGE_READY=true` once a bucket with CORS exists, and they run. Nothing else in the
-suite is skipped or conditional.
+The suite contains 45 tests. Four move bytes and skip unless a real Supabase bucket is available;
+set `E2E_STORAGE_READY=true` once its CORS policy is configured. The remaining 41 run against the
+local API, PostgreSQL, and Vite stack.
 
 Playwright injects sessions from its own harness rather than adding a production login backdoor.
 The actual Google round trip is intentionally a manual deployment check.
@@ -384,38 +305,6 @@ It does not remodel the tree or share-recipient tables. The same separation can 
 recipients, deny rules, download restrictions, expiry, or network constraints inside the permission
 boundary.
 
-## Deployment notes
-
-The intended topology is a long-running Nest service on Render/Railway, a Vite build on Vercel,
-Supabase PostgreSQL/Storage, and Google OAuth. Production must use:
-
-- the exact deployed `WEB_ORIGIN` for credentialed CORS;
-- `COOKIE_SAMESITE=none` with `COOKIE_SECURE=true`;
-- the deployed `/api/v1/auth/google/callback` registered with Google;
-- `VITE_API_URL` set to the API origin and no secret under any `VITE_` name;
-- a private bucket and a backend-only Supabase service-role key;
-- migrations and the seed run deliberately against the selected database.
-
-Before calling a deployment verified, test the refresh cookie in Safari and Chrome incognito, perform a
-real multi-file upload with visible progress, open and download a file, and confirm a revoked share fails
-on the very next request.
-
-### Two production settings that fail silently if you skip them
-
-Both are now enforced by the environment schema, so a misconfigured deploy stops at boot rather than
-at rest. They are called out because their failure modes are invisible:
-
-- **`DATABASE_URL` must carry `?sslmode=require`.** `node-postgres` speaks plaintext unless asked
-  otherwise, and the API and the database are on different hosts. Without it, refresh-token hashes
-  and share-recipient addresses cross the public internet in the clear, and nothing anywhere reports
-  it — the only way it surfaces is if the server happens to *refuse* the cleartext connection.
-  `sslmode=prefer` and `allow` do not count; both fall back silently.
-- **`TRUST_PROXY_HOPS` must be `1`** (already set in `render.yaml`). Express leaves `req.ips` empty
-  unless it trusts a proxy, so behind a platform load balancer every visitor keys to the same
-  rate-limit bucket and the 10/min limit on `GET /shared/:token` becomes 10/min for the entire
-  internet. It is a hop *count* and not `true`, because `true` trusts the whole `X-Forwarded-For`
-  chain and lets any caller mint themselves unlimited buckets by prepending an address.
-
 ## Security posture
 
 The controls that are load-bearing, and the exceptions that are deliberate.
@@ -455,36 +344,14 @@ out. `vercel.json` serves the SPA with a CSP (`frame-ancestors 'none'`, `object-
 `strict-origin-when-cross-origin` referrer policy — the last matters specifically because share
 tokens live in the URL path.
 
-**Share tokens and OAuth.** `returnTo` is stashed in `sessionStorage` under a random key and only
-the key travels through the OAuth `state`, so a `/s/<token>/…` path is never handed to Google. The
-`state` parameter is encoding, not encryption.
+**Share tokens and OAuth.** A sensitive `returnTo` is stashed in `sessionStorage` under a random
+key, and that key travels through OAuth `state`. If storage is unavailable, sign-in falls back to
+`/rooms`, so a `/s/<token>/…` path is never handed to Google. The `state` parameter is encoding,
+not encryption.
 
 **Housekeeping.** Expired refresh-token rows are pruned nightly; a revoked row is kept for a full
 refresh lifetime past revocation, because it is what makes a replay *detectable* rather than an
 ordinary "no such token".
-
-### Accepted exceptions
-
-| Item | Why it stands |
-| --- | --- |
-| `@nestjs/core` GHSA-36xv-jgw5-4q75 (moderate) | CRLF injection in `SseStream`. This API declares no SSE route, so the code path is unreachable. The fix is `>=11.1.18`, a Nest major upgrade that also moves `platform-express` to Express 5 — scheduled, not skipped. `pnpm audit --prod --audit-level=high` is the CI gate, so this does not block a build; every advisory above moderate resolves through `pnpm.overrides` in the root `package.json`. |
-| Logout does not invalidate an already-issued access token | It is a stateless JWT with a 15-minute TTL; logout revokes the whole refresh family, so the window is bounded and non-renewable. Making it revocable means a denylist checked on every request, which trades the property this design was chosen for. Stated rather than assumed. |
-| Successor sharing uses a 15-second in-process cache | Render's current API deployment is a single instance, so racing tabs converge on the exact same refresh and access tokens. A cache miss revokes the family rather than minting anything. If the API scales to multiple instances, a shared ephemeral store such as Redis is required to preserve that multi-tab behavior. |
-
-## Deviations register
-
-The implementation plan records deliberate changes as Contract Change Protocol notes:
-
-| Note  | Status                     | Decision and rationale                                                                                                                                                                                                                                      |
-| ----- | -------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| CCP-1 | Applied                    | Added Nest peer dependencies, SWC decorator transforms, coverage/RTL tooling, a pinned pdf.js worker dependency, and contract-package test tooling required by the chosen stack.                                                                            |
-| CCP-2 | Applied                    | Replaced the ineffective global `nestjs-zod` approach with a small per-parameter `ZodValidationPipe`, keeping the exact contract schema visible at each controller boundary and mapping validation details consistently.                                    |
-| CCP-3 | Applied                    | Added server-side `refresh_tokens`; hashed rotating tokens and family revocation cannot be implemented statelessly.                                                                                                                                         |
-| CCP-5 | Applied                    | Widened upload size validation from positive to nonnegative, because empty files are legitimate; completion still requires exact equality with object-storage size.                                                                                         |
-| CCP-6 | Applied                    | A second presentation inside the 15-second race window receives the exact cached successor session, never an independent token; cache misses and out-of-window replays revoke the family. The cache is process-local because recoverable refresh tokens are never persisted, which is safe on the current single-instance deployment and requires a shared ephemeral store before scaling out. |
-| CCP-7 | Applied                    | Abort deletes the pending version and placeholder node instead of inventing an unread `abandoned` state; this immediately frees the reserved filename and matches sweeper cleanup.                                                                          |
-| DEC-1 | **Settled**                | Permissioned shares now expose *both* revocations, because they mean different things: the per-recipient control ends one grant, and **Stop sharing** ends the share itself so a later invitation starts a new one rather than reopening the old. Covered by component and browser tests. |
-| CCP-9 | Applied                    | `packages/contracts` gained `isSafeReturnTo`, the one definition of "same-origin path", and `GoogleAuthQuery` now refines against it. A contract edit was unavoidable: the same rule is enforced on both sides of the OAuth round trip, and three independent copies of it are what let `/\evil.com` through the client while the server was never asked. Predicate only — no exported schema — so the frozen export inventory is unchanged. |
 
 ## AI usage
 
