@@ -1,8 +1,10 @@
-import type {
-  DownloadOptions,
-  SignedUrl,
-  StorageService,
-  StoredObject,
+import {
+  mimeEssence,
+  type DownloadOptions,
+  type SignedUrl,
+  type StorageService,
+  type StoredObject,
+  type UploadGrant,
 } from '../../src/storage/storage.service';
 
 /**
@@ -16,7 +18,12 @@ import type {
  * against the real thing.
  */
 export class FakeStorageService implements StorageService {
-  private readonly objects = new Map<string, number>();
+  /**
+   * What the store holds, keyed by object key. `contentType` is the header the *client* wrote on
+   * its `PUT` — the whole point of `complete`'s check is that it need not equal what was declared
+   * at `init`, so `putObject` takes it separately.
+   */
+  private readonly objects = new Map<string, { sizeBytes: number; contentType: string | null }>();
 
   /** Every URL minted, so a test can assert TTLs and dispositions rather than guess. */
   readonly minted: Array<{
@@ -25,13 +32,21 @@ export class FakeStorageService implements StorageService {
     ttlSeconds: number;
     disposition?: 'inline' | 'attachment';
     filename?: string;
+    contentType?: string;
+    allowOverwrite?: boolean;
   }> = [];
 
-  createSignedUploadUrl(key: string, ttlSeconds: number): Promise<SignedUrl> {
-    this.minted.push({ key, kind: 'upload', ttlSeconds });
+  createSignedUploadUrl(key: string, grant: UploadGrant): Promise<SignedUrl> {
+    this.minted.push({
+      key,
+      kind: 'upload',
+      ttlSeconds: grant.ttlSeconds,
+      contentType: grant.contentType,
+      allowOverwrite: grant.allowOverwrite,
+    });
     return Promise.resolve({
       url: `https://storage.test/upload/${encodeURIComponent(key)}?n=${this.minted.length}`,
-      expiresAt: new Date(Date.now() + ttlSeconds * 1000),
+      expiresAt: new Date(Date.now() + grant.ttlSeconds * 1000),
     });
   }
 
@@ -68,8 +83,13 @@ export class FakeStorageService implements StorageService {
    */
   async stat(key: string): Promise<StoredObject> {
     await new Promise((resolve) => setTimeout(resolve, 1));
-    const size = this.objects.get(key);
-    return size === undefined ? { exists: false, sizeBytes: 0 } : { exists: true, sizeBytes: size };
+    const object = this.objects.get(key);
+    if (object === undefined) return { exists: false, sizeBytes: 0, contentType: null };
+    return {
+      exists: true,
+      sizeBytes: object.sizeBytes,
+      contentType: mimeEssence(object.contentType),
+    };
   }
 
   delete(key: string): Promise<void> {
@@ -79,9 +99,17 @@ export class FakeStorageService implements StorageService {
 
   // ── test controls ────────────────────────────────────────────────────────────
 
-  /** Stand in for the browser's `PUT`: the bytes arrive without the API ever seeing them. */
-  putObject(key: string, sizeBytes: number): void {
-    this.objects.set(key, sizeBytes);
+  /**
+   * Stand in for the browser's `PUT`: the bytes arrive without the API ever seeing them.
+   *
+   * `contentType` defaults to the type the grant for this key asked for, which is what an honest
+   * client sends. Pass a different one to reproduce the declare-PDF-store-HTML case.
+   */
+  putObject(key: string, sizeBytes: number, contentType?: string): void {
+    const granted = [...this.minted]
+      .reverse()
+      .find((entry) => entry.kind === 'upload' && entry.key === key)?.contentType;
+    this.objects.set(key, { sizeBytes, contentType: contentType ?? granted ?? null });
   }
 
   has(key: string): boolean {

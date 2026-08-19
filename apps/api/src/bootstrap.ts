@@ -21,6 +21,16 @@ export function configureApp(app: INestApplication, config: AppConfig): void {
   httpAdapter.set?.('strict routing', true);
   httpAdapter.set?.('case sensitive routing', true);
 
+  // The throttler keys its buckets on `req.ips[0] ?? req.ip`, and Express leaves `req.ips` empty
+  // unless it is told to trust a proxy. Without this every visitor behind the platform load
+  // balancer shares one bucket, and the 10/min limit on `/shared/:token` becomes 10/min for the
+  // whole internet — one popular link denies the endpoint to everybody.
+  //
+  // The hop count, never `true`: `true` trusts the entire `X-Forwarded-For` chain, which lets any
+  // caller prepend a fake address and mint themselves a fresh bucket per request. `1` trusts only
+  // the address the platform's own proxy appended.
+  httpAdapter.set?.('trust proxy', config.trustProxyHops);
+
   app.setGlobalPrefix(API_BASE);
   app.use(cookieParser());
   app.use(helmet());

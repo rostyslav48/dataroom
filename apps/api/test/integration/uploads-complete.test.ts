@@ -172,6 +172,43 @@ describe('uploads — complete and retry', () => {
       expect((await versionRow(reserved.versionId)).status).toBe('pending');
     });
 
+    it('refuses when the bytes are not the type they were declared as', async () => {
+      // The attack the type check exists for. `init` validates the declared `mimeType` against
+      // ALLOWED_MIME_TYPES, but the browser writes the Content-Type header on its own direct PUT —
+      // so declare `application/pdf`, send HTML with a matching byte count, and without this check
+      // the node completes as a PDF. `GET /nodes/:id/content` would then 302 to a URL serving that
+      // HTML inline, from the storage origin, to every recipient of the share.
+      const reserved = await reserve({ sizeBytes: 4096, mimeType: 'application/pdf' });
+      harness.storage.putObject(reserved.storageKey, 4096, 'text/html');
+
+      const response = await complete(reserved.versionId);
+      expect(response.status).toBe(415);
+      expect(ApiError.parse(response.body).code).toBe('UNSUPPORTED_TYPE');
+      expect((await versionRow(reserved.versionId)).status).toBe('pending');
+    });
+
+    it('refuses when storage recorded no type at all — unknown is not matching', async () => {
+      const reserved = await reserve({ sizeBytes: 4096 });
+      harness.storage.putObject(reserved.storageKey, 4096, '');
+
+      expect((await complete(reserved.versionId)).status).toBe(415);
+      expect((await versionRow(reserved.versionId)).status).toBe('pending');
+    });
+
+    it('accepts a stored type that differs only by charset or case', async () => {
+      // Storage may append `; charset=…` to what the client sent. That is the same type, and
+      // reading it as a mismatch would fail every honest text upload.
+      const reserved = await reserve({
+        name: 'notes.txt',
+        sizeBytes: 12,
+        mimeType: 'text/plain',
+      });
+      harness.storage.putObject(reserved.storageKey, 12, 'TEXT/PLAIN; charset=UTF-8');
+
+      expect((await complete(reserved.versionId)).status).toBe(200);
+      expect((await versionRow(reserved.versionId)).status).toBe('ready');
+    });
+
     it('refuses when storage holds more than was declared', async () => {
       const reserved = await reserve({ sizeBytes: 4096 });
       // The attack the exact-equality check exists for: declare 4 KB to clear the cap, store 50 MB.
@@ -414,7 +451,10 @@ describe('uploads — complete and retry', () => {
 
       const minted = harness.storage.lastMinted('upload');
       expect(minted?.key).toBe(reserved.storageKey);
-      expect(minted?.ttlSeconds).toBe(3600);
+      expect(minted?.ttlSeconds).toBe(900);
+      // Retry is the *only* grant allowed to overwrite: a failed PUT can leave a partial object,
+      // and the version is still pending, so nothing downstream has read it.
+      expect(minted?.allowOverwrite).toBe(true);
     });
 
     it('creates no second node — which is the entire reason it exists', async () => {

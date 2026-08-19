@@ -27,9 +27,14 @@ export class GoogleStrategy extends PassportStrategy(Strategy, 'google') {
       );
     }
 
-    // Permissioned sharing matches on email. Accepting an unverified one would create an account
-    // that silently cannot receive the shares addressed to it.
-    if (primary?.verified !== undefined && String(primary.verified) !== 'true') {
+    // Permissioned sharing matches on email, and `signInWithGoogle` claims every unclaimed
+    // `share_recipients` row addressed to this address on first sign-in. An address accepted here
+    // therefore *inherits* whatever was already invited to it.
+    //
+    // Fails closed: a missing `verified` counts as unverified. The check used to run only when the
+    // field was present, so any shape change in `passport-google-oauth20` — or a provider response
+    // variation, or a Workspace edge case — would have made every address verified.
+    if (String(primary?.verified) !== 'true') {
       throw errors.forbidden(
         'Your Google email address is not verified. Verify it with Google, then sign in again.',
       );

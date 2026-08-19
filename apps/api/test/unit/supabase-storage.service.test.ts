@@ -7,11 +7,12 @@ vi.mock('@supabase/supabase-js', () => ({ createClient }));
 
 import { DomainError } from '../../src/common/domain-error';
 import type { AppConfig } from '../../src/config/app.config';
+import type { UploadGrant } from '../../src/storage/storage.service';
 import { SupabaseStorageService } from '../../src/storage/supabase-storage.service';
 
 interface StoredEntry {
   name: string;
-  metadata: { size?: number } | null;
+  metadata: { size?: number; mimetype?: string } | null;
 }
 
 /**
@@ -103,9 +104,16 @@ describe('SupabaseStorageService', () => {
   });
 
   describe('createSignedUploadUrl', () => {
+    const grant = (overrides: Partial<UploadGrant> = {}): UploadGrant => ({
+      ttlSeconds: 3600,
+      contentType: 'application/pdf',
+      allowOverwrite: false,
+      ...overrides,
+    });
+
     it('returns the signed url with an expiry the requested number of seconds out', async () => {
       const before = Date.now();
-      const signed = await service.createSignedUploadUrl('room/node/version', 3600);
+      const signed = await service.createSignedUploadUrl('room/node/version', grant());
 
       expect(signed.url).toBe('https://project.supabase.co/upload/signed');
       const ttlMs = signed.expiresAt.getTime() - before;
@@ -113,8 +121,19 @@ describe('SupabaseStorageService', () => {
       expect(ttlMs).toBeLessThanOrEqual(3_600_000 + 1_000);
     });
 
-    it('upserts, so a retry writes over the reservation instead of failing', async () => {
-      await service.createSignedUploadUrl('room/node/version', 3600);
+    // The grant decides, not the implementation. A URL that could always overwrite meant a
+    // completed version's bytes could be replaced for the rest of the URL's life — see
+    // `UploadGrant.allowOverwrite`.
+    it('refuses to overwrite unless the grant allows it', async () => {
+      await service.createSignedUploadUrl('room/node/version', grant());
+      expect(bucket.argsOf('createSignedUploadUrl')).toEqual([
+        'room/node/version',
+        { upsert: false },
+      ]);
+    });
+
+    it('upserts when the grant allows it, so a retry writes over a partial object', async () => {
+      await service.createSignedUploadUrl('room/node/version', grant({ allowOverwrite: true }));
       expect(bucket.argsOf('createSignedUploadUrl')).toEqual([
         'room/node/version',
         { upsert: true },
@@ -124,7 +143,9 @@ describe('SupabaseStorageService', () => {
     it('turns a storage failure into an internal error, disclosing nothing', async () => {
       bucket.signedUpload = { data: null, error: { message: 'bucket "documents" not found' } };
 
-      const error = await service.createSignedUploadUrl('room/node/version', 3600).catch((e) => e);
+      const error = await service
+        .createSignedUploadUrl('room/node/version', grant())
+        .catch((e) => e);
 
       expect(error).toBeInstanceOf(DomainError);
       expect((error as DomainError).code).toBe('INTERNAL');
@@ -134,9 +155,9 @@ describe('SupabaseStorageService', () => {
 
     it('fails rather than returning an unsigned url when data comes back empty', async () => {
       bucket.signedUpload = { data: null, error: null };
-      await expect(service.createSignedUploadUrl('room/node/version', 3600)).rejects.toBeInstanceOf(
-        DomainError,
-      );
+      await expect(
+        service.createSignedUploadUrl('room/node/version', grant()),
+      ).rejects.toBeInstanceOf(DomainError);
     });
   });
 
@@ -206,31 +227,58 @@ describe('SupabaseStorageService', () => {
 
   describe('stat', () => {
     it('lists the object’s own directory and matches the name exactly', async () => {
-      bucket.listed = { data: [{ name: 'version', metadata: { size: 2048 } }], error: null };
+      bucket.listed = {
+        data: [{ name: 'version', metadata: { size: 2048, mimetype: 'application/pdf' } }],
+        error: null,
+      };
 
       const object = await service.stat('room/node/version');
 
-      expect(object).toEqual({ exists: true, sizeBytes: 2048 });
+      expect(object).toEqual({ exists: true, sizeBytes: 2048, contentType: 'application/pdf' });
       expect(bucket.argsOf('list')).toEqual(['room/node', { limit: 1, search: 'version' }]);
     });
 
     it('reports a missing object rather than throwing', async () => {
       bucket.listed = { data: [], error: null };
-      expect(await service.stat('room/node/version')).toEqual({ exists: false, sizeBytes: 0 });
+      expect(await service.stat('room/node/version')).toEqual({
+        exists: false,
+        sizeBytes: 0,
+        contentType: null,
+      });
     });
 
     it('does not accept a near-miss that `search` happened to return', async () => {
       // Supabase's `search` is a prefix match, so a sibling key can come back. Treating it as the
       // object would let `complete` promote a version against somebody else's bytes.
       bucket.listed = { data: [{ name: 'version-2', metadata: { size: 9999 } }], error: null };
-      expect(await service.stat('room/node/version')).toEqual({ exists: false, sizeBytes: 0 });
+      expect(await service.stat('room/node/version')).toEqual({
+        exists: false,
+        sizeBytes: 0,
+        contentType: null,
+      });
     });
 
     it('treats an object with no size metadata as existing but empty', async () => {
       bucket.listed = { data: [{ name: 'version', metadata: null }], error: null };
       // `complete` compares sizes exactly, so a zero here rejects the upload — the honest outcome
-      // when storage will not say how big the object is.
-      expect(await service.stat('room/node/version')).toEqual({ exists: true, sizeBytes: 0 });
+      // when storage will not say how big the object is. A `null` content type is refused there for
+      // the same reason: "unknown" is not "matching".
+      expect(await service.stat('room/node/version')).toEqual({
+        exists: true,
+        sizeBytes: 0,
+        contentType: null,
+      });
+    });
+
+    it('reports the content type essence, without the charset the store may append', async () => {
+      // What storage recorded is the byte-level fact `complete` checks the declared type against,
+      // and a store that appends `; charset=UTF-8` to what the client sent must not read as a
+      // mismatch.
+      bucket.listed = {
+        data: [{ name: 'version', metadata: { size: 4, mimetype: 'TEXT/PLAIN; charset=UTF-8' } }],
+        error: null,
+      };
+      expect(await service.stat('room/node/version')).toMatchObject({ contentType: 'text/plain' });
     });
 
     it('handles a key with no prefix', async () => {

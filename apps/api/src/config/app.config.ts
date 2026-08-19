@@ -37,6 +37,28 @@ export class AppConfig {
     return this.env.DATABASE_URL;
   }
 
+  /**
+   * TLS for the database connection, in the shape `node-postgres` expects.
+   *
+   * The env schema already refuses to boot a production process whose `DATABASE_URL` lacks
+   * `sslmode=require`, but the connection-string parameter alone leaves certificate verification
+   * to the driver's defaults. Setting it here makes the requirement a property of the code rather
+   * than of whoever filled in the dashboard.
+   */
+  get databaseSsl(): { rejectUnauthorized: boolean } | false {
+    return this.isProduction ? { rejectUnauthorized: true } : false;
+  }
+
+  /** Express `trust proxy`. See the note in `bootstrap.ts` for why this is a count, not a boolean. */
+  get trustProxyHops(): number {
+    return this.env.TRUST_PROXY_HOPS;
+  }
+
+  /** The global rate-limit ceiling. The narrowed per-route limits live in `app.module.ts`. */
+  get rateLimitPerMinute(): number {
+    return this.env.RATE_LIMIT_PER_MINUTE;
+  }
+
   get google(): { clientId: string; clientSecret: string; callbackUrl: string } {
     return {
       clientId: this.env.GOOGLE_CLIENT_ID,

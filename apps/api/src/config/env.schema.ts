@@ -16,6 +16,9 @@ const booleanish = z
 /** `15m`, `30d`, `900s` — the format both `@nestjs/jwt` and our cookie maxAge understand. */
 const duration = z.string().regex(/^\d+(ms|s|m|h|d)$/, 'must look like 15m, 3600s or 30d');
 
+/** The `sslmode` values that actually encrypt. `prefer` and `allow` silently fall back to plaintext. */
+const REQUIRES_TLS = /[?&]sslmode=(require|verify-ca|verify-full)(&|$)/;
+
 export const EnvSchema = z
   .object({
     NODE_ENV: z.enum(['development', 'test', 'production']).default('development'),
@@ -27,8 +30,12 @@ export const EnvSchema = z
     GOOGLE_CLIENT_SECRET: z.string().min(1),
     GOOGLE_CALLBACK_URL: z.string().url(),
 
-    JWT_ACCESS_SECRET: z.string().min(16),
-    JWT_REFRESH_SECRET: z.string().min(16),
+    // 32 characters is ~192 bits for an alphanumeric secret. HS256 wants 256; this is the floor
+    // below which a hand-typed passphrase stops being a key. Production uses Render's
+    // `generateValue`, so the rule bites on self-hosted and staging deploys, which is where a
+    // human picks the value.
+    JWT_ACCESS_SECRET: z.string().min(32),
+    JWT_REFRESH_SECRET: z.string().min(32),
     ACCESS_TOKEN_TTL: duration.default('15m'),
     REFRESH_TOKEN_TTL: duration.default('30d'),
 
@@ -40,6 +47,24 @@ export const EnvSchema = z
     SUPABASE_BUCKET: z.string().min(1),
 
     MAX_UPLOAD_BYTES: z.coerce.number().int().positive().default(104_857_600),
+
+    /**
+     * How many reverse proxies sit in front of this process, for Express's `trust proxy`.
+     *
+     * `0` means "no proxy" and is right for local development and tests. `1` is right for Render,
+     * Fly, Heroku and every other single-load-balancer platform. It is a hop *count* rather than a
+     * boolean because `trust proxy: true` trusts the whole `X-Forwarded-For` chain, and a caller
+     * who can prepend an address to that chain can mint themselves an unlimited number of
+     * rate-limit buckets.
+     */
+    TRUST_PROXY_HOPS: z.coerce.number().int().min(0).max(10).default(0),
+
+    /**
+     * Requests per minute per client IP, across the whole API. The abuse-sensitive routes narrow
+     * this further at the handler; see `app.module.ts`. Loose by default on purpose — it caps a
+     * script rather than shaping ordinary traffic, and a whole office behind one NAT is one key.
+     */
+    RATE_LIMIT_PER_MINUTE: z.coerce.number().int().positive().default(1_200),
 
     WEB_ORIGIN: z.string().url(),
   })
@@ -58,6 +83,31 @@ export const EnvSchema = z
         code: z.ZodIssueCode.custom,
         path: ['COOKIE_SECURE'],
         message: 'must be true when COOKIE_SAMESITE=none — browsers reject the cookie otherwise',
+      });
+    }
+    // node-postgres does not negotiate TLS unless it is asked to. Without `sslmode`, a production
+    // API and an external database exchange refresh-token hashes and recipient email addresses in
+    // plaintext across the public internet, and nothing anywhere notices — the failure is silent
+    // by construction, visible only if the server happens to *refuse* the cleartext connection.
+    // Same class of guarantee as the cookie rule above: fail at boot, not at rest.
+    if (env.NODE_ENV === 'production' && !REQUIRES_TLS.test(env.DATABASE_URL)) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['DATABASE_URL'],
+        message:
+          'must carry sslmode=require (or verify-ca / verify-full) in production — ' +
+          'without it node-postgres connects in plaintext',
+      });
+    }
+    // A proxy that is not trusted makes every client share one rate-limit bucket; see
+    // `bootstrap.ts`. Production is always behind at least one.
+    if (env.NODE_ENV === 'production' && env.TRUST_PROXY_HOPS < 1) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['TRUST_PROXY_HOPS'],
+        message:
+          'must be at least 1 in production — the platform load balancer is a proxy, and ' +
+          'without this every caller shares one rate-limit bucket',
       });
     }
   });

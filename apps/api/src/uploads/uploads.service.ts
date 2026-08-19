@@ -4,6 +4,7 @@ import { InjectDataSource } from '@nestjs/typeorm';
 import { DataSource, QueryFailedError, type EntityManager } from 'typeorm';
 import {
   ALLOWED_MIME_TYPES,
+  PREVIEWABLE_MIME_TYPES,
   type CompleteUploadResponse,
   type InitUploadResponse,
   type RetryUploadResponse,
@@ -19,6 +20,7 @@ import {
   READ_URL_TTL_SECONDS,
   STORAGE_SERVICE,
   WRITE_URL_TTL_SECONDS,
+  mimeEssence,
   sanitizeFilename,
   storageKeyFor,
   type SignedUrl,
@@ -148,7 +150,13 @@ export class UploadsService {
 
     let signed: SignedUrl;
     try {
-      signed = await this.storage.createSignedUploadUrl(storageKey, WRITE_URL_TTL_SECONDS);
+      signed = await this.storage.createSignedUploadUrl(storageKey, {
+        ttlSeconds: WRITE_URL_TTL_SECONDS,
+        contentType: input.mimeType,
+        // The key is a freshly minted version UUID; nothing can already be at it. Overwrite is
+        // `retry`'s privilege alone.
+        allowOverwrite: false,
+      });
     } catch (error) {
       // The rows are committed but the client never learns the `versionId`, so it can neither
       // `retry` nor `abort` — it would be left with an invisible reservation holding a name it
@@ -195,6 +203,26 @@ export class UploadsService {
       // upload was truncated or the declaration was a lie. The version stays pending for the
       // sweeper either way.
       throw errors.uploadIncomplete('The uploaded file does not match what was expected.');
+    }
+    // The declared type becomes a fact about the file only here.
+    //
+    // `init` checks the declared `mimeType` against `ALLOWED_MIME_TYPES`, but the browser writes
+    // the `Content-Type` header on its own direct `PUT` — so without this the allowlist was
+    // decorative. Declare `application/pdf`, send HTML with a matching byte count, and the node
+    // completes as a PDF; `GET /nodes/:id/content` then 302s to a URL that serves that HTML
+    // `inline`, on the storage origin, to everyone the file is shared with.
+    //
+    // A store that reports no type at all is refused rather than waved through: "unknown" is not
+    // "matching", and the only way to get here is a store that did not record what it was sent.
+    const stored = object.contentType;
+    if (stored !== mimeEssence(version.mimeType)) {
+      this.logger.warn(
+        { versionId, declared: version.mimeType, stored },
+        'stored content type does not match the declared one; refusing to promote',
+      );
+      throw errors.unsupportedType(
+        'The uploaded file is not the type it was declared as. Upload it again.',
+      );
     }
 
     const node = await this.dataSource.transaction(async (manager) => {
@@ -243,10 +271,14 @@ export class UploadsService {
       throw errors.notFound('That upload already finished.');
     }
 
-    const { url, expiresAt } = await this.storage.createSignedUploadUrl(
-      version.storageKey,
-      WRITE_URL_TTL_SECONDS,
-    );
+    const { url, expiresAt } = await this.storage.createSignedUploadUrl(version.storageKey, {
+      ttlSeconds: WRITE_URL_TTL_SECONDS,
+      contentType: version.mimeType,
+      // The only grant that may overwrite: a failed `PUT` can leave a partial object at this key,
+      // and the version is by definition still `pending` (checked above), so nothing downstream
+      // has read it yet.
+      allowOverwrite: true,
+    });
     return { uploadUrl: url, uploadExpiresAt: expiresAt.toISOString() };
   }
 
@@ -300,15 +332,27 @@ export class UploadsService {
       throw errors.notFound('That item has no file to open.');
     }
 
-    const [version] = await selectRows<{ storageKey: string }>(
+    const [version] = await selectRows<{ storageKey: string; mimeType: string }>(
       this.dataSource,
-      `SELECT storage_key AS "storageKey" FROM file_versions WHERE id = $1`,
+      `SELECT storage_key AS "storageKey", mime_type AS "mimeType" FROM file_versions WHERE id = $1`,
       [node.currentVersionId],
     );
     if (!version) throw errors.notFound('That item has no file to open.');
 
+    // `inline` is granted only to the types the app actually previews. Everything else is served
+    // as a download regardless of what the caller asked for.
+    //
+    // Belt to `complete`'s braces: that check makes the stored content type match the declared one,
+    // and this makes the *declared* type the only thing that can ever be rendered in a browsing
+    // context. Two independent failures would be needed to get arbitrary markup rendered from the
+    // storage origin, and neither alone is enough.
+    const previewable = (PREVIEWABLE_MIME_TYPES as readonly string[]).includes(
+      mimeEssence(version.mimeType) ?? '',
+    );
+    const effective = disposition === 'inline' && !previewable ? 'attachment' : disposition;
+
     return this.storage.createSignedDownloadUrl(version.storageKey, READ_URL_TTL_SECONDS, {
-      disposition,
+      disposition: effective,
       // The node's name is user input and ends up in a `Content-Disposition` header written by
       // whichever object store is behind the interface, so it is sanitised here — before it leaves
       // the service — rather than in one implementation of it.

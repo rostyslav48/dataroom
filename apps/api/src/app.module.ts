@@ -1,9 +1,11 @@
 import { randomUUID } from 'node:crypto';
 import { Module } from '@nestjs/common';
+import { APP_GUARD } from '@nestjs/core';
 import { ScheduleModule } from '@nestjs/schedule';
-import { ThrottlerModule } from '@nestjs/throttler';
+import { ThrottlerGuard, ThrottlerModule } from '@nestjs/throttler';
 import { LoggerModule } from 'nestjs-pino';
 import { AuthModule } from './auth/auth.module';
+import { RATE_LIMIT_WINDOW_MS } from './common/rate-limits';
 import { AppConfig } from './config/app.config';
 import { ConfigModule } from './config/config.module';
 import { DataRoomsModule } from './data-rooms/data-rooms.module';
@@ -15,9 +17,6 @@ import { SharesModule } from './shares/shares.module';
 import { StorageModule } from './storage/storage.module';
 import { UploadsModule } from './uploads/uploads.module';
 import { UsersModule } from './users/users.module';
-
-/** One minute, ten requests — the limit `/shared/:token` is served under (SPEC-05). */
-export const SHARE_THROTTLER = 'share';
 
 @Module({
   imports: [
@@ -47,9 +46,13 @@ export const SHARE_THROTTLER = 'share';
         },
       }),
     }),
-    // Only `/shared/:token` is throttled; it is the one endpoint reachable with no session at all.
-    ThrottlerModule.forRoot({
-      throttlers: [{ name: SHARE_THROTTLER, ttl: 60_000, limit: 10 }],
+    // Every route is throttled, with the abuse-sensitive ones narrowed at the handler. Registered
+    // async so the ceiling is deployment-configurable; see `AppConfig.rateLimitPerMinute`.
+    ThrottlerModule.forRootAsync({
+      inject: [AppConfig],
+      useFactory: (config: AppConfig) => ({
+        throttlers: [{ ttl: RATE_LIMIT_WINDOW_MS, limit: config.rateLimitPerMinute }],
+      }),
     }),
     ScheduleModule.forRoot(),
 
@@ -63,5 +66,10 @@ export const SHARE_THROTTLER = 'share';
     SharesModule,
   ],
   controllers: [HealthController],
+  providers: [
+    // Global, so a new endpoint is limited by default rather than by whoever remembers the
+    // decorator. Unthrottled-by-default is how `/health` and `/auth/refresh` ended up open.
+    { provide: APP_GUARD, useClass: ThrottlerGuard },
+  ],
 })
 export class AppModule {}

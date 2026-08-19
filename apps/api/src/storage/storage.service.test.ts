@@ -22,12 +22,15 @@ describe('storage keys', () => {
 });
 
 describe('signed url lifetimes', () => {
-  it('are 60 seconds for reads and an hour for writes', () => {
+  it('are 60 seconds for reads and 15 minutes for writes', () => {
     // Read URLs are short on purpose: one copied out of devtools dies almost immediately, and a
     // revoked share cannot be outrun by a pre-fetched link.
     expect(READ_URL_TTL_SECONDS).toBe(60);
-    // Writes need to survive a 100 MB upload on a poor connection.
-    expect(WRITE_URL_TTL_SECONDS).toBe(3600);
+    // Writes need to survive a 100 MB upload on a poor connection — 15 minutes is ~110 KB/s
+    // sustained — but no longer, because a write URL is a live capability to replace the bytes at
+    // that key. At an hour, a version could be completed, shared, read, and then overwritten.
+    expect(WRITE_URL_TTL_SECONDS).toBe(900);
+    expect(WRITE_URL_TTL_SECONDS).toBeLessThan(3600);
   });
 });
 

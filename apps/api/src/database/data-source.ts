@@ -24,9 +24,17 @@ if (!databaseUrl) {
   throw new Error(`DATABASE_URL is not set (looked for an .env at ${envFile})`);
 }
 
+/**
+ * The CLI runs migrations against the same database the app queries, so it needs the same TLS
+ * posture. `AppConfig` is unavailable out here (see above), so the rule is restated rather than
+ * imported — it is two lines, and a migration that connects in plaintext is the same leak.
+ */
+const ssl = process.env.NODE_ENV === 'production' ? { rejectUnauthorized: true } : false;
+
 export const dataSourceOptions: DataSourceOptions = {
   type: 'postgres',
   url: databaseUrl,
+  ssl,
   entities: ALL_ENTITIES,
   migrations: MIGRATIONS,
   // Entities are a typed view over the migrations, never the source of truth.

@@ -5,8 +5,8 @@ import { UploadsService } from './uploads.service';
 /**
  * How long a `pending` version is given before it is treated as abandoned.
  *
- * Comfortably longer than any upload can plausibly take — the write URL itself only lives an hour —
- * so the sweeper can never race a `complete` that is still coming.
+ * Comfortably longer than any upload can plausibly take — the write URL itself lives only fifteen
+ * minutes — so the sweeper can never race a `complete` that is still coming.
  */
 export const ABANDONED_AFTER_HOURS = 24;
 

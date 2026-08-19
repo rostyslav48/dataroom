@@ -10,7 +10,7 @@ import {
   Post,
   UseGuards,
 } from '@nestjs/common';
-import { ThrottlerGuard } from '@nestjs/throttler';
+import { Throttle } from '@nestjs/throttler';
 import {
   AddRecipientsBody,
   CreateShareBody,
@@ -18,7 +18,9 @@ import {
   type ListSharesResponse,
   type ResolveShareResponse,
   type ShareDto,
+  Uuid,
 } from '@dataroom/contracts';
+import { SHARE_THROTTLE } from '../common/rate-limits';
 import { CurrentIdentity, isUser, type Identity } from '../auth/identity';
 import { Public } from '../auth/public.decorator';
 import { errors } from '../common/domain-error';
@@ -75,7 +77,11 @@ export class SharesController {
   @UseGuards(OwnerGuard)
   revokeRecipient(
     @Param('id') id: string,
-    @Param('recipientId') recipientId: string,
+    // `AccessGuard` validates only the parameter named by `@Resource`, so this one arrives raw.
+    // `share_recipients.id` is a uuid column: a malformed value reaches Postgres, raises
+    // `22P02 invalid input syntax`, and surfaces as a 500 with an error-level log line for what is
+    // an ordinary client mistake. Validated here so it is the 400 it always was.
+    @Param('recipientId', validate(Uuid)) recipientId: string,
   ): Promise<void> {
     return this.shares.revokeRecipient(id, recipientId);
   }
@@ -91,7 +97,7 @@ export class SharesController {
   @Get(endpoints.shares.resolve.path)
   @Public()
   @Header('X-Robots-Tag', 'noindex')
-  @UseGuards(ThrottlerGuard)
+  @Throttle(SHARE_THROTTLE)
   resolve(@Param('token') token: string): Promise<ResolveShareResponse> {
     return this.shares.resolve(token);
   }

@@ -10,6 +10,8 @@ import { AuthService } from './auth.service';
 import { GoogleCallbackGuard, GoogleStartGuard } from './google-auth.guard';
 import { GoogleStrategy } from './google.strategy';
 import { JwtAuthGuard } from './jwt-auth.guard';
+import { SameOriginGuard } from './same-origin.guard';
+import { TokensPruner } from './tokens.pruner';
 import { TokensService } from './tokens.service';
 
 @Module({
@@ -23,9 +25,11 @@ import { TokensService } from './tokens.service';
   providers: [
     AuthService,
     TokensService,
+    TokensPruner,
     GoogleStrategy,
     GoogleStartGuard,
     GoogleCallbackGuard,
+    SameOriginGuard,
     // Global: every endpoint is authenticated unless it says otherwise.
     { provide: APP_GUARD, useClass: JwtAuthGuard },
   ],

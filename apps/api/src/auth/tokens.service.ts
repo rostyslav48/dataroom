@@ -127,4 +127,26 @@ export class TokensService {
     const row = await this.refreshTokens.findOne({ where: { tokenHash: hash(presented) } });
     if (row) await this.revokeFamily(row.familyId);
   }
+
+  /**
+   * Deletes refresh-token rows that can no longer authenticate anything.
+   *
+   * A row is prunable once it is past `expires_at` — expiry is absolute, so nothing revives it —
+   * and, if it was revoked, once the replay-detection window has passed. That second clause is the
+   * subtle one: a revoked row is what makes a replay *detectable*, so deleting it early turns a
+   * detected replay back into a plain "no such token", which reads as an ordinary expiry and
+   * revokes nothing. Rows are kept for a full refresh lifetime past revocation for that reason.
+   *
+   * Returns the number deleted, so the caller can log a number that is true rather than attempted.
+   */
+  async pruneExpired(now: Date = new Date()): Promise<number> {
+    const cutoff = new Date(now.getTime() - this.config.jwt.refreshTtlMs);
+    const result = await this.refreshTokens
+      .createQueryBuilder()
+      .delete()
+      .where('expires_at < :now', { now })
+      .andWhere('(revoked_at IS NULL OR revoked_at < :cutoff)', { cutoff })
+      .execute();
+    return result.affected ?? 0;
+  }
 }

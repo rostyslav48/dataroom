@@ -11,6 +11,9 @@ import { MIGRATIONS } from './migrations';
       useFactory: (config: AppConfig) => ({
         type: 'postgres' as const,
         url: config.databaseUrl,
+        // node-postgres speaks plaintext unless asked otherwise, and the database is external to
+        // the API's host in every deployed topology. See `AppConfig.databaseSsl`.
+        ssl: config.databaseSsl,
         entities: ALL_ENTITIES,
         migrations: MIGRATIONS,
         // Never true, including locally: a schema that drifts from its migrations is a schema

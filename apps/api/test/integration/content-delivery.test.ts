@@ -76,6 +76,23 @@ describe('content delivery — /content and /download', () => {
       expect(response.headers.location).toContain('https://storage.test/object/');
     });
 
+    it('downgrades a non-previewable type to attachment, whatever the caller asked for', async () => {
+      // The containment layer for a spoofed upload. `complete` already refuses to promote a
+      // version whose stored bytes are not the declared type, so this is the second of two
+      // independent failures that would both have to happen before arbitrary markup could be
+      // rendered in a browsing context on the storage origin.
+      //
+      // `inline` is granted only to PREVIEWABLE_MIME_TYPES — today, PDF alone. Everything else is
+      // served as a download even when the viewer route asks to embed it.
+      await harness.dataSource.query(`UPDATE file_versions SET mime_type = 'text/html' WHERE id = (
+        SELECT current_version_id FROM nodes WHERE id = $1)`, [seeded.ndaId]);
+
+      const response = await asOwner(contentPath(seeded.ndaId));
+
+      expect(response.status).toBe(302);
+      expect(harness.storage.lastMinted('download')?.disposition).toBe('attachment');
+    });
+
     it('never lets a signed URL be cached by an intermediary', async () => {
       // The Location header *is* the credential for the next sixty seconds. A shared cache holding
       // this 302 would hand one user's URL to the next.

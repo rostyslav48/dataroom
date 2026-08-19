@@ -9,7 +9,7 @@ import {
   fixtures,
 } from '@dataroom/contracts';
 import { seedFixtures, type SeededFixtures } from '../../src/database/seed-fixtures';
-import { storageKeyFor } from '../../src/storage/storage.service';
+import { WRITE_URL_TTL_SECONDS, storageKeyFor } from '../../src/storage/storage.service';
 import { createTestHarness, httpServer, type TestHarness } from '../support/app';
 import { resetDatabase } from '../support/database';
 
@@ -192,17 +192,23 @@ describe('uploads — init and abort', () => {
       expect(row.name).toBe('NDA (2).pdf');
     });
 
-    it('mints the write URL with a one-hour TTL, against the reserved version key', async () => {
+    it('mints a 15-minute, no-overwrite write URL against the reserved version key', async () => {
       const body = InitUploadResponse.parse((await init(pdf())).body);
 
       const minted = only(harness.storage.minted, 'one minted URL');
       expect(minted.kind).toBe('upload');
-      expect(minted.ttlSeconds).toBe(3600);
+      expect(minted.ttlSeconds).toBe(WRITE_URL_TTL_SECONDS);
+      expect(minted.ttlSeconds).toBe(900);
+      // The key is a fresh version UUID, so nothing can be at it — and a grant that could
+      // overwrite would stay usable after `complete` promoted the version.
+      expect(minted.allowOverwrite).toBe(false);
+      // The type the client must send. `complete` refuses to promote if storage recorded another.
+      expect(minted.contentType).toBe('application/pdf');
       expect(minted.key).toBe(storageKeyFor(seeded.roomId, body.nodeId, body.versionId));
 
       const secondsAway = (Date.parse(body.uploadExpiresAt) - Date.now()) / 1000;
-      expect(secondsAway).toBeGreaterThan(3400);
-      expect(secondsAway).toBeLessThanOrEqual(3600);
+      expect(secondsAway).toBeGreaterThan(WRITE_URL_TTL_SECONDS - 60);
+      expect(secondsAway).toBeLessThanOrEqual(WRITE_URL_TTL_SECONDS);
     });
 
     it('accepts a zero-byte file', async () => {

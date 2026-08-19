@@ -1,18 +1,26 @@
 import { Controller, Get, HttpCode, HttpStatus, Post, Req, Res, UseGuards } from '@nestjs/common';
+import { Throttle } from '@nestjs/throttler';
 import type { Request, Response } from 'express';
 import { endpoints, type MeResponse, type RefreshResponse } from '@dataroom/contracts';
+import { AUTH_THROTTLE } from '../common/rate-limits';
 import { AppConfig } from '../config/app.config';
 import type { GoogleIdentity } from '../users/users.service';
 import { AuthService } from './auth.service';
 import { GoogleCallbackGuard, GoogleStartGuard } from './google-auth.guard';
 import { CurrentIdentity, type Identity } from './identity';
 import { Public } from './public.decorator';
+import { SameOriginGuard } from './same-origin.guard';
 import { returnToFromState } from './return-to';
 
 /**
  * Routes are declared from the contract's `endpoints` rather than from string literals, so a path
  * typo is a compile error instead of a 404 found at integration.
+ *
+ * Every route here is narrowed below the global rate-limit ceiling. All three public ones do real
+ * database work per call — `refresh` an `UPDATE … RETURNING` plus an `INSERT`, the OAuth legs a
+ * user upsert and a recipient backfill — and none of them requires a session to reach.
  */
+@Throttle(AUTH_THROTTLE)
 @Controller()
 export class AuthController {
   constructor(
@@ -46,7 +54,13 @@ export class AuthController {
     response.redirect(`${this.config.webOrigin}${returnToFromState(request.query.state)}`);
   }
 
+  /**
+   * Guarded against cross-site invocation: the refresh cookie is `SameSite=None` in production, so
+   * without `SameOriginGuard` any page on the internet could spend a visitor's refresh token and
+   * log them out of their other tabs. See the guard for why the check is "present and wrong".
+   */
   @Public()
+  @UseGuards(SameOriginGuard)
   @HttpCode(HttpStatus.OK)
   @Post(endpoints.auth.refresh.path)
   async refresh(@Req() request: Request, @Res() response: Response): Promise<void> {
@@ -58,6 +72,7 @@ export class AuthController {
     response.json(body);
   }
 
+  @UseGuards(SameOriginGuard)
   @HttpCode(HttpStatus.NO_CONTENT)
   @Post(endpoints.auth.logout.path)
   async logout(@Req() request: Request, @Res() response: Response): Promise<void> {

@@ -90,6 +90,16 @@ describe('auth', () => {
       ['a protocol-relative url', '//evil.com'],
       ['a scheme-only value', 'javascript:alert(1)'],
       ['a bare path with no leading slash', 'rooms'],
+      // The WHATWG URL parser treats `\` exactly like `/` in the authority position, so every one
+      // of these resolves to `https://evil.com/` against any base. The old guard — "starts with
+      // `/`, does not start with `//`" — let all four straight through.
+      ['a backslash-relative url', '/\\evil.com'],
+      ['a mixed separator url', '/\\/evil.com'],
+      ['a slash-then-backslash url', '/\\\\evil.com'],
+      ['a percent-encoded backslash', '/%5Cevil.com'],
+      // Browsers strip tab, CR and LF from a URL *before* parsing it, so this becomes `//evil.com`.
+      ['a tab-smuggled authority', '/\t/evil.com'],
+      ['a newline-smuggled authority', '/\n/evil.com'],
     ])('rejects %s as VALIDATION_FAILED', async (_label, returnTo) => {
       const response = await request(httpServer(harness))
         .get(url(endpoints.auth.googleStart.path))
@@ -194,6 +204,9 @@ describe('auth', () => {
       ['an absolute url', 'https://evil.com'],
       ['a protocol-relative url', '//evil.com'],
       ['a javascript scheme', 'javascript:alert(1)'],
+      ['a backslash-relative url', '/\\evil.com'],
+      ['a percent-encoded backslash', '/%5Cevil.com'],
+      ['a tab-smuggled authority', '/\t/evil.com'],
     ])('falls back to the default when state carries %s', async (_label, returnTo) => {
       // The state is re-validated on the way back in, not merely on the way out: this is a value
       // that left our control entirely and came back through somebody else's redirect.
@@ -302,6 +315,52 @@ describe('auth', () => {
       expect(session.user.email).toBe('owner@example.com');
       expect(new Date(session.accessTokenExpiresAt).getTime()).toBeGreaterThan(Date.now());
       expect(refreshCookie(response.headers as Record<string, unknown>)).toBeDefined();
+    });
+
+    it('refuses a rotation requested from another origin, without spending the token', async () => {
+      // The refresh cookie is `SameSite=None` in production, so any page on the internet could
+      // `fetch(api + '/auth/refresh', { credentials: 'include' })`. CORS stops it reading the
+      // response, but the rotation would still happen — spending the victim's token and logging
+      // their other tabs out. A forced-logout primitive on demand.
+      const { cookie } = await signIn();
+
+      const refused = await request(httpServer(harness))
+        .post(url(endpoints.auth.refresh.path))
+        .set('Origin', 'https://evil.example.com')
+        .set('Cookie', cookie)
+        .expect(403);
+      expect(ApiError.parse(refused.body).code).toBe('FORBIDDEN');
+      expect(refreshCookie(refused.headers as Record<string, unknown>)).toBeUndefined();
+
+      // Nothing was consumed: the same cookie still works from the web app's own origin.
+      await request(httpServer(harness))
+        .post(url(endpoints.auth.refresh.path))
+        .set('Origin', 'http://localhost:5173')
+        .set('Cookie', cookie)
+        .expect(200);
+    });
+
+    it('refuses a cross-origin logout for the same reason', async () => {
+      // Logout already needs a bearer token, so it was never reachable by CSRF on its own — the
+      // guard is defence in depth for the day the endpoint becomes `@Public()`. The access header
+      // is set here so the assertion is about the origin check rather than about the 401.
+      const { cookie } = await signIn();
+      const user = await harness.dataSource
+        .getRepository(UserEntity)
+        .findOneByOrFail({ googleSub: 'google-sub-1' });
+
+      await request(httpServer(harness))
+        .post(url(endpoints.auth.logout.path))
+        .set(await harness.authHeader(user))
+        .set('Origin', 'https://evil.example.com')
+        .set('Cookie', cookie)
+        .expect(403);
+
+      // Still signed in.
+      await request(httpServer(harness))
+        .post(url(endpoints.auth.refresh.path))
+        .set('Cookie', cookie)
+        .expect(200);
     });
 
     it('rotates the refresh token on every use', async () => {

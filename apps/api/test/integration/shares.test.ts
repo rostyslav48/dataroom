@@ -400,6 +400,24 @@ describe('shares', () => {
       expect(rows[0]?.revokedAt).toBeInstanceOf(Date);
     });
 
+    it('answers 400, not 500, when the recipient id is not a uuid', async () => {
+      // `AccessGuard` validates only the parameter named by `@Resource`, so `recipientId` used to
+      // reach Postgres raw. `share_recipients.id` is a uuid column, so a malformed value raised
+      // `22P02 invalid input syntax`, which `toDomainError` does not map — the caller got a 500 and
+      // the server logged an error, for an ordinary client mistake.
+      const response = await request(httpServer(harness))
+        .delete(
+          url(endpoints.shares.revokeRecipient.path, {
+            id: seeded.permissionedShareId,
+            recipientId: 'not-a-uuid',
+          }),
+        )
+        .set(await harness.authHeader(owner));
+
+      expect(response.status).toBe(400);
+      expect(ApiError.parse(response.body).code).toBe('VALIDATION_FAILED');
+    });
+
     it('does not revoke a recipient through a different share id', async () => {
       const recipientRows: Array<{ id: string }> = await harness.dataSource.query(
         `SELECT id FROM share_recipients WHERE share_id = $1`,
