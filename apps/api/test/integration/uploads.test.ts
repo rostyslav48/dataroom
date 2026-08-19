@@ -151,6 +151,29 @@ describe('uploads — init and abort', () => {
       expect(harness.storage.minted).toEqual([]);
     });
 
+    it('does not echo a long CRLF-bearing unsupported mime in its bounded 415 response', async () => {
+      const prefix = 'application/x-unsupported\r\nX-Injected: yes\r\n';
+      const unsupportedMime = `${prefix}${'a'.repeat(5_000 - prefix.length)}`;
+      expect(unsupportedMime).toHaveLength(5_000);
+
+      const response = await init(pdf({ name: 'hostile.bin', mimeType: unsupportedMime }));
+
+      expect(response.status).toBe(415);
+      const body = ApiError.parse(response.body);
+      expect(body.code).toBe('UNSUPPORTED_TYPE');
+      expect(body.message).toBe('This file type is not supported.');
+      expect(body.message).not.toContain(unsupportedMime);
+      expect(body.message).not.toContain('\r\n');
+      expect(body.message.length).toBeLessThanOrEqual(100);
+      const serialized = JSON.stringify(response.body);
+      expect(serialized).not.toContain('X-Injected');
+      expect(serialized.length).toBeLessThanOrEqual(512);
+
+      expect(await pendingVersions()).toEqual([]);
+      expect(await childNames(seeded.legalId)).toEqual(['NDA.pdf']);
+      expect(harness.storage.minted).toEqual([]);
+    });
+
     it('suffixes a name a live sibling already holds, and reserves the node under it', async () => {
       const response = await init(pdf({ name: 'NDA.pdf' }));
       expect(response.status).toBe(201);

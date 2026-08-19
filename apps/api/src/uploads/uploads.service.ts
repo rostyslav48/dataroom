@@ -100,7 +100,7 @@ export class UploadsService {
     }
 
     if (!(ALLOWED_MIME_TYPES as readonly string[]).includes(input.mimeType)) {
-      throw errors.unsupportedType(`Data Room does not accept ${input.mimeType} files.`);
+      throw errors.unsupportedType('This file type is not supported.');
     }
 
     const taken = await this.siblingNames(parent.id);
