@@ -32,11 +32,8 @@ const store = () => useUploadStore.getState();
  * unwrapped. Awaiting the resting state *inside* the scope is what makes that go away for the right
  * reason: the test observes a settled queue instead of racing it.
  *
- * Three warnings survive this, all in the two tests that leave a PUT in flight rather than
- * completing it. Traced as far as: every store transition lands inside this scope — subscribing to
- * the store and logging shows nothing after the last one — yet React still schedules a render
- * through the panel's `useUploadStore` subscription once the scope has closed. Left as noise rather
- * than papered over with a blanket `console.error` filter, which would hide the next real one.
+ * Tests can intentionally leave the signed PUT in flight. Teardown aborts it; the store recognizes
+ * that its row has already been reset and does not publish a stale error update afterward.
  */
 async function enqueueSettled(files: File[], parentId: string, until: string[]): Promise<void> {
   await act(async () => {

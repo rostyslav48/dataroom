@@ -143,7 +143,12 @@ export const useUploadStore = create<UploadStore>()((set, get) => {
         });
         await transfer(localId, init.uploadUrl);
       } catch (error) {
-        if (get().items.find((candidate) => candidate.localId === localId)?.status === 'canceled') {
+        const currentStatus = get().items.find(
+          (candidate) => candidate.localId === localId,
+        )?.status;
+        // A reset/dismiss removes the row before aborting its transfer. The rejected PUT belongs to
+        // that retired request and must not publish a no-op update into the new queue.
+        if (currentStatus === undefined || currentStatus === 'canceled') {
           return;
         }
         patch(localId, { status: 'error', error: failure(error) });
@@ -227,7 +232,10 @@ export const useUploadStore = create<UploadStore>()((set, get) => {
           const fresh = await retryUpload(versionId);
           await transfer(localId, fresh.uploadUrl);
         } catch (error) {
-          if (get().items.find((candidate) => candidate.localId === localId)?.status === 'canceled') {
+          const currentStatus = get().items.find(
+            (candidate) => candidate.localId === localId,
+          )?.status;
+          if (currentStatus === undefined || currentStatus === 'canceled') {
             return;
           }
           patch(localId, { status: 'error', error: failure(error) });

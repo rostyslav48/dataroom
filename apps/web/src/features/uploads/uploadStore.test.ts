@@ -280,6 +280,26 @@ describe('queue bookkeeping', () => {
     expect(store().items.find((item) => item.localId === remaining)).toBeUndefined();
   });
 
+  it('does not publish a stale failure after reset aborts an in-flight PUT', async () => {
+    store().enqueue([pdf('a.pdf')], IDS.rootNode);
+    await waitFor(() => {
+      expect(FakeXhr.instances).toHaveLength(1);
+    });
+
+    const updates = vi.fn();
+    const unsubscribe = useUploadStore.subscribe(updates);
+    store().reset();
+    const updatesAtReset = updates.mock.calls.length;
+
+    await new Promise<void>((resolve) => {
+      setTimeout(resolve, 0);
+    });
+    expect(FakeXhr.last().aborted).toBe(true);
+    expect(store().items).toEqual([]);
+    expect(updates).toHaveBeenCalledTimes(updatesAtReset);
+    unsubscribe();
+  });
+
   it('keeps the queue across a folder change, because it lives outside the page', async () => {
     store().enqueue([pdf('a.pdf')], IDS.rootNode);
     await waitFor(() => {
