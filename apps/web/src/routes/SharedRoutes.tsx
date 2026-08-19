@@ -40,6 +40,7 @@ export function ShareEntryRoute(): JSX.Element {
         <AccessErrorScreen
           error={resolved.error}
           context={shareContext(token)}
+          itemGoneIsShareRoot
           onRetry={() => {
             void resolved.refetch();
           }}

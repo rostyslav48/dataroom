@@ -109,6 +109,36 @@ describe('the /s/:token tree', () => {
     renderApp(`/s/${PUBLIC_LINK_TOKEN}`);
     expect(await screen.findByText('This link has expired')).toBeInTheDocument();
   });
+
+  it('renders a terminal gone state when the share entry proves the root was deleted', async () => {
+    state.nodes.delete(IDS.folderFin);
+
+    renderApp(`/s/${PUBLIC_LINK_TOKEN}`);
+
+    expect(await screen.findByText('This item was deleted by the owner')).toBeInTheDocument();
+    expect(
+      screen.getByText(/there is nothing else in this share to go back to/),
+    ).toBeInTheDocument();
+    expect(
+      screen.queryByRole('button', { name: 'Back to the shared item' }),
+    ).not.toBeInTheDocument();
+  });
+
+  it('re-resolves the share entry after its root was transiently unavailable', async () => {
+    forceError('ITEM_GONE', { endpointKey: 'nodes.get', times: 1 });
+    forceError('RATE_LIMITED', { endpointKey: 'shares.resolve', times: 1 });
+    renderApp(`/s/${PUBLIC_LINK_TOKEN}/f/${IDS.folderQ3}`);
+
+    expect(await screen.findByText('This item was deleted by the owner')).toBeInTheDocument();
+    await userEvent.click(screen.getByRole('button', { name: 'Back to the shared item' }));
+
+    await waitFor(() => {
+      expect(screen.getByTestId('pathname')).toHaveTextContent(
+        `/s/${PUBLIC_LINK_TOKEN}/f/${IDS.folderFin}`,
+      );
+    });
+    expect(await screen.findByRole('button', { name: 'Q3' })).toBeInTheDocument();
+  });
 });
 
 describe('layout comes from the response, not the route', () => {

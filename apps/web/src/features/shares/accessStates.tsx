@@ -52,21 +52,26 @@ export interface ShareGoneStateProps {
   /** Omitted when the deleted item *is* the share root — the screen is then terminal. */
   onBack?: (() => void) | undefined;
   backLabel?: string;
+  rootStatus?: 'available' | 'unknown' | 'gone';
 }
 
 export function ShareGoneState({
   onBack,
   backLabel = 'Back to the shared folder',
+  rootStatus = onBack === undefined ? 'gone' : 'available',
 }: ShareGoneStateProps): JSX.Element {
+  const body =
+    rootStatus === 'gone'
+      ? 'It is no longer available, and there is nothing else in this share to go back to.'
+      : rootStatus === 'available'
+        ? 'It is no longer available. The rest of the shared folder is still here.'
+        : 'It is no longer available. Return to the shared link to check what is still available.';
+
   return (
     <StateBlock
       icon={<Trash2 aria-hidden="true" className="h-8 w-8" />}
       title="This item was deleted by the owner"
-      body={
-        onBack === undefined
-          ? 'It is no longer available, and there is nothing else in this share to go back to.'
-          : 'It is no longer available. The rest of the shared folder is still here.'
-      }
+      body={body}
       {...(onBack === undefined ? {} : { action: { label: backLabel, onClick: onBack } })}
     />
   );
@@ -130,6 +135,8 @@ export interface AccessErrorScreenProps {
   shareRootId?: string | null | undefined;
   /** The node that failed. Equal to the share root means the gone state is terminal. */
   nodeId?: string | undefined;
+  /** The share resolver itself returned ITEM_GONE, proving that the root is the deleted item. */
+  itemGoneIsShareRoot?: boolean | undefined;
   onRetry?: (() => void) | undefined;
 }
 
@@ -138,6 +145,7 @@ export function AccessErrorScreen({
   context,
   shareRootId,
   nodeId,
+  itemGoneIsShareRoot = false,
   onRetry,
 }: AccessErrorScreenProps): JSX.Element {
   const auth = useContext(AuthContext);
@@ -156,16 +164,29 @@ export function AccessErrorScreen({
     case 'ITEM_GONE': {
       const knownRoot = shareRootId !== null && shareRootId !== undefined && shareRootId !== '';
       // Terminal when the share root itself is gone: there is nothing left in the grant to go to.
-      const backHref = knownRoot
-        ? shareRootId === nodeId
-          ? undefined
-          : folderPath(context, shareRootId)
-        : context.kind === 'room'
-          ? contextRoot(context)
-          : undefined;
+      const rootStatus =
+        itemGoneIsShareRoot || (knownRoot && shareRootId === nodeId)
+          ? 'gone'
+          : knownRoot || context.kind === 'room'
+            ? 'available'
+            : 'unknown';
+      const backHref = itemGoneIsShareRoot
+        ? undefined
+        : knownRoot
+          ? shareRootId === nodeId
+            ? undefined
+            : folderPath(context, shareRootId)
+          : contextRoot(context);
       return (
         <ShareGoneState
-          backLabel={context.kind === 'room' ? 'Back to the data room' : 'Back to the shared folder'}
+          rootStatus={rootStatus}
+          backLabel={
+            context.kind === 'room'
+              ? 'Back to the data room'
+              : rootStatus === 'unknown'
+                ? 'Back to the shared item'
+                : 'Back to the shared folder'
+          }
           onBack={
             backHref === undefined
               ? undefined

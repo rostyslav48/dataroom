@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { fixtures } from '@dataroom/contracts';
+import { useLocation } from 'react-router-dom';
 import { useMockApi } from '@/test/msw';
 import { renderWithProviders } from '@/test/harness';
 import { state } from '@/mocks/db';
@@ -59,8 +60,14 @@ const { saveBlob } = await import('@/lib/browser');
 
 useMockApi();
 
-const { IDS } = fixtures;
+const { IDS, PUBLIC_LINK_TOKEN } = fixtures;
 const roomContext = { kind: 'room', roomId: IDS.room } as const;
+const shareContext = { kind: 'share', token: PUBLIC_LINK_TOKEN } as const;
+
+function LocationProbe(): JSX.Element {
+  const location = useLocation();
+  return <span data-testid="pathname">{location.pathname}</span>;
+}
 
 function renderViewer(nodeId: string = IDS.fileNda): void {
   renderWithProviders(<FileViewerPage nodeId={nodeId} context={roomContext} />, {
@@ -173,6 +180,24 @@ describe('FileViewerPage', () => {
     forceError('ITEM_GONE', { endpointKey: 'nodes.get' });
     renderViewer();
     expect(await screen.findByText('This item was deleted by the owner')).toBeInTheDocument();
+  });
+
+  it('returns through the share entry when a gone descendant has an unresolved root', async () => {
+    forceError('ITEM_GONE', { endpointKey: 'nodes.get' });
+    forceError('RATE_LIMITED', { endpointKey: 'shares.resolve' });
+    renderWithProviders(
+      <>
+        <LocationProbe />
+        <FileViewerPage nodeId={IDS.fileBalance} context={shareContext} />
+      </>,
+      { route: `/s/${PUBLIC_LINK_TOKEN}/file/${IDS.fileBalance}` },
+    );
+
+    expect(await screen.findByText('This item was deleted by the owner')).toBeInTheDocument();
+    expect(screen.queryByText(/nothing else in this share/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/rest of the shared folder is still here/)).not.toBeInTheDocument();
+    await userEvent.click(screen.getByRole('button', { name: 'Back to the shared item' }));
+    expect(screen.getByTestId('pathname')).toHaveTextContent(`/s/${PUBLIC_LINK_TOKEN}`);
   });
 
   it('renders the forbidden state for a file outside the caller’s grant', async () => {
