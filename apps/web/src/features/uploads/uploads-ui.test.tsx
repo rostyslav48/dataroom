@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { fireEvent, screen, waitFor, within } from '@testing-library/react';
+import { act, fireEvent, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { fixtures, type UploadQueueItem } from '@dataroom/contracts';
 import { useMockApi } from '@/test/msw';
@@ -16,6 +16,47 @@ useMockApi();
 
 const { IDS } = fixtures;
 const store = () => useUploadStore.getState();
+
+/**
+ * The upload store is a Zustand store, so calling it from a test is a state update in whatever
+ * component is subscribed to it — `act` is what tells React the update is expected. Without it the
+ * assertions still pass, on a tree React has warned it may not have finished rendering, which is
+ * the same class of "green for the wrong reason" the rest of this suite is careful about.
+ */
+
+/**
+ * Enqueue, and stay inside `act` until the queue stops moving.
+ *
+ * `enqueue` returns immediately and then runs `init` → signed PUT in the background, so an `act`
+ * that only wraps the call closes before the first patch lands and React reports the update as
+ * unwrapped. Awaiting the resting state *inside* the scope is what makes that go away for the right
+ * reason: the test observes a settled queue instead of racing it.
+ *
+ * Three warnings survive this, all in the two tests that leave a PUT in flight rather than
+ * completing it. Traced as far as: every store transition lands inside this scope — subscribing to
+ * the store and logging shows nothing after the last one — yet React still schedules a render
+ * through the panel's `useUploadStore` subscription once the scope has closed. Left as noise rather
+ * than papered over with a blanket `console.error` filter, which would hide the next real one.
+ */
+async function enqueueSettled(files: File[], parentId: string, until: string[]): Promise<void> {
+  await act(async () => {
+    store().enqueue(files, parentId);
+    for (let attempt = 0; attempt < 100; attempt += 1) {
+      const statuses = store().items.map((item) => item.status);
+      if (statuses.length === until.length && statuses.every((s, i) => s === until[i])) {
+        // One more turn after the state matches: the transfer's own bookkeeping lands a tick later,
+        // and leaving that turn outside the scope is the difference between a quiet run and a warning.
+        await new Promise((resolve) => {
+          setTimeout(resolve, 20);
+        });
+        return;
+      }
+      await new Promise((resolve) => {
+        setTimeout(resolve, 5);
+      });
+    }
+  });
+}
 
 function pdf(name: string, size = 1024): File {
   return new File([new Uint8Array(size)], name, { type: 'application/pdf' });
@@ -54,7 +95,9 @@ beforeEach(() => {
 });
 
 afterEach(() => {
-  store().reset();
+  act(() => {
+    store().reset();
+  });
   restoreXhr();
 });
 
@@ -211,7 +254,11 @@ describe('UploadItem', () => {
     renderWithProviders(
       <ul>
         <UploadItem
-          item={{ ...base, status: 'error', error: { code: 'NETWORK', message: 'The connection dropped' } }}
+          item={{
+            ...base,
+            status: 'error',
+            error: { code: 'NETWORK', message: 'The connection dropped' },
+          }}
           onCancel={vi.fn()}
           onRetry={onRetry}
           onDismiss={vi.fn()}
@@ -232,7 +279,13 @@ describe('UploadQueuePanel', () => {
 
   it('lists queued files with aggregate progress in the header', async () => {
     renderWithProviders(<UploadQueuePanel />);
-    store().enqueue([pdf('a.pdf'), pdf('b.pdf')], IDS.rootNode);
+    await enqueueSettled([pdf('a.pdf'), pdf('b.pdf')], IDS.rootNode, ['uploading', 'uploading']);
+    // Let both reservations reach the PUT. Asserting mid-flight would leave the queue transitioning
+    // after the test body has finished — updates React then reports as unwrapped, and assertions
+    // that raced whichever state happened to be current.
+    await waitFor(() => {
+      expect(store().items.map((item) => item.status)).toEqual(['uploading', 'uploading']);
+    });
 
     const panel = await screen.findByRole('region', { name: 'Uploads' });
     expect(within(panel).getByText(/of 2/)).toBeInTheDocument();
@@ -241,7 +294,10 @@ describe('UploadQueuePanel', () => {
 
   it('collapses and expands', async () => {
     renderWithProviders(<UploadQueuePanel />);
-    store().enqueue([pdf('a.pdf')], IDS.rootNode);
+    await enqueueSettled([pdf('a.pdf')], IDS.rootNode, ['uploading']);
+    await waitFor(() => {
+      expect(store().items.map((item) => item.status)).toEqual(['uploading']);
+    });
     await screen.findByRole('region', { name: 'Uploads' });
 
     await userEvent.click(screen.getByRole('button', { name: 'Collapse uploads' }));
@@ -253,18 +309,20 @@ describe('UploadQueuePanel', () => {
 
   it('reports completion once every upload finishes', async () => {
     renderWithProviders(<UploadQueuePanel />);
-    store().enqueue([pdf('a.pdf')], IDS.rootNode);
+    await enqueueSettled([pdf('a.pdf')], IDS.rootNode, ['uploading']);
     await waitFor(() => {
       expect(FakeXhr.instances).toHaveLength(1);
     });
-    FakeXhr.last().succeed();
+    act(() => {
+      FakeXhr.last().succeed();
+    });
 
     expect(await screen.findByText('1 of 1 uploaded')).toBeInTheDocument();
   });
 
   it('warns before unload while uploads are in flight, and not once idle', async () => {
     renderWithProviders(<UploadQueuePanel />);
-    store().enqueue([pdf('a.pdf')], IDS.rootNode);
+    await enqueueSettled([pdf('a.pdf')], IDS.rootNode, ['uploading']);
     await screen.findByRole('region', { name: 'Uploads' });
 
     const duringUpload = new Event('beforeunload', { cancelable: true });
@@ -274,7 +332,9 @@ describe('UploadQueuePanel', () => {
     await waitFor(() => {
       expect(FakeXhr.instances).toHaveLength(1);
     });
-    FakeXhr.last().succeed();
+    act(() => {
+      FakeXhr.last().succeed();
+    });
     await screen.findByText('1 of 1 uploaded');
 
     const whenIdle = new Event('beforeunload', { cancelable: true });
@@ -284,11 +344,13 @@ describe('UploadQueuePanel', () => {
 
   it('announces completion politely, since the queue is a corner widget nobody is watching', async () => {
     renderWithProviders(<UploadQueuePanel />);
-    store().enqueue([pdf('a.pdf')], IDS.rootNode);
+    await enqueueSettled([pdf('a.pdf')], IDS.rootNode, ['uploading']);
     await waitFor(() => {
       expect(FakeXhr.instances).toHaveLength(1);
     });
-    FakeXhr.last().succeed();
+    act(() => {
+      FakeXhr.last().succeed();
+    });
 
     const region = await screen.findByTestId('upload-announcement');
     await waitFor(() => {
@@ -304,12 +366,14 @@ describe('UploadQueuePanel', () => {
         <Toaster />
       </>,
     );
-    store().enqueue([pdf('a.pdf'), pdf('b.pdf')], IDS.rootNode);
+    await enqueueSettled([pdf('a.pdf'), pdf('b.pdf')], IDS.rootNode, ['uploading', 'uploading']);
     await waitFor(() => {
       expect(FakeXhr.instances).toHaveLength(2);
     });
-    FakeXhr.instances.forEach((xhr) => {
-      xhr.succeed();
+    act(() => {
+      FakeXhr.instances.forEach((xhr) => {
+        xhr.succeed();
+      });
     });
 
     expect(await screen.findByText('2 files uploaded')).toBeInTheDocument();
@@ -322,20 +386,24 @@ describe('UploadQueuePanel', () => {
         <Toaster />
       </>,
     );
-    store().enqueue([pdf('a.pdf')], IDS.rootNode);
+    await enqueueSettled([pdf('a.pdf')], IDS.rootNode, ['uploading']);
     await waitFor(() => {
       expect(FakeXhr.instances).toHaveLength(1);
     });
-    FakeXhr.last().fail();
+    act(() => {
+      FakeXhr.last().fail();
+    });
 
     await screen.findByRole('alert');
     expect(useToastStore.getState().toasts).toHaveLength(0);
-    expect(await screen.findByTestId('upload-announcement')).toHaveTextContent('0 files uploaded, 1 failed');
+    expect(await screen.findByTestId('upload-announcement')).toHaveTextContent(
+      '0 files uploaded, 1 failed',
+    );
   });
 
   it('closes the panel and drops the queue when dismissed', async () => {
     renderWithProviders(<UploadQueuePanel />);
-    store().enqueue([pdf('a.pdf')], IDS.rootNode);
+    await enqueueSettled([pdf('a.pdf')], IDS.rootNode, ['uploading']);
     await screen.findByRole('region', { name: 'Uploads' });
 
     await userEvent.click(screen.getByRole('button', { name: 'Close uploads' }));

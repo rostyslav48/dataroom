@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it } from 'vitest';
-import { screen, waitFor } from '@testing-library/react';
+import { act, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { renderWithProviders } from '@/test/harness';
 import { Toaster, toastSuccess, useToastStore } from './Toast';
@@ -19,18 +19,27 @@ describe('Toaster', () => {
   it('shows a queued message, and several in order', async () => {
     renderWithProviders(<Toaster />);
 
-    toastSuccess('Moved “NDA.pdf”');
+    // `toastSuccess` writes to the store the mounted Toaster subscribes to, so it is a React
+    // state update and belongs inside `act` — the assertions passed without it, against a tree
+    // React had warned it might not have finished rendering.
+    act(() => {
+      toastSuccess('Moved “NDA.pdf”');
+    });
     expect(await screen.findByText('Moved “NDA.pdf”')).toBeInTheDocument();
 
-    toastSuccess('2 files uploaded');
+    act(() => {
+      toastSuccess('2 files uploaded');
+    });
     expect(await screen.findByText('2 files uploaded')).toBeInTheDocument();
     expect(screen.getByText('Moved “NDA.pdf”')).toBeInTheDocument();
   });
 
   it('dismisses one without disturbing the rest', async () => {
     renderWithProviders(<Toaster />);
-    toastSuccess('First');
-    toastSuccess('Second');
+    act(() => {
+      toastSuccess('First');
+      toastSuccess('Second');
+    });
     await screen.findByText('Second');
 
     const [dismiss] = screen.getAllByRole('button', { name: 'Dismiss' });
