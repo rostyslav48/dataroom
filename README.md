@@ -20,8 +20,9 @@ The findings of the 19 August security review and QA audit have been remediated 
 see **Security posture** below for what each control now is, and its **Accepted exceptions** table
 for the three that were deliberately left standing with reasons.
 
-One security-design decision is still open: refresh-token reuse currently has a 15-second grace
-window for simultaneous browser-tab refreshes. See the deviations register for the exact trade-off.
+Refresh-token reuse has a 15-second browser-tab race window, but a second presenter receives the
+exact successor already issued rather than a new credential. See the deviations register for the
+single-instance limitation and fail-closed behavior.
 
 ## What is implemented
 
@@ -488,7 +489,7 @@ ordinary "no such token".
 | --- | --- |
 | `@nestjs/core` GHSA-36xv-jgw5-4q75 (moderate) | CRLF injection in `SseStream`. This API declares no SSE route, so the code path is unreachable. The fix is `>=11.1.18`, a Nest major upgrade that also moves `platform-express` to Express 5 — scheduled, not skipped. `pnpm audit --prod --audit-level=high` is the CI gate, so this does not block a build; every advisory above moderate resolves through `pnpm.overrides` in the root `package.json`. |
 | Logout does not invalidate an already-issued access token | It is a stateless JWT with a 15-minute TTL; logout revokes the whole refresh family, so the window is bounded and non-renewable. Making it revocable means a denylist checked on every request, which trades the property this design was chosen for. Stated rather than assumed. |
-| The 15-second refresh replay grace window | See CCP-6 in the deviations register — an open owner decision, not an oversight. |
+| Successor sharing uses a 15-second in-process cache | Render's current API deployment is a single instance, so racing tabs converge on the exact same refresh and access tokens. A cache miss revokes the family rather than minting anything. If the API scales to multiple instances, a shared ephemeral store such as Redis is required to preserve that multi-tab behavior. |
 
 ## Deviations register
 
@@ -500,7 +501,7 @@ The implementation plan records deliberate changes as Contract Change Protocol n
 | CCP-2 | Applied                    | Replaced the ineffective global `nestjs-zod` approach with a small per-parameter `ZodValidationPipe`, keeping the exact contract schema visible at each controller boundary and mapping validation details consistently.                                    |
 | CCP-3 | Applied                    | Added server-side `refresh_tokens`; hashed rotating tokens and family revocation cannot be implemented statelessly.                                                                                                                                         |
 | CCP-5 | Applied                    | Widened upload size validation from positive to nonnegative, because empty files are legitimate; completion still requires exact equality with object-storage size.                                                                                         |
-| CCP-6 | **Pending owner decision** | The code allows a 15-second refresh replay grace window so two tabs do not log each other out. The spec still promises unconditional family revocation. The recommended successor-token design removes the theft window without breaking multi-tab refresh. |
+| CCP-6 | Applied                    | A second presentation inside the 15-second race window receives the exact cached successor session, never an independent token; cache misses and out-of-window replays revoke the family. The cache is process-local because recoverable refresh tokens are never persisted, which is safe on the current single-instance deployment and requires a shared ephemeral store before scaling out. |
 | CCP-7 | Applied                    | Abort deletes the pending version and placeholder node instead of inventing an unread `abandoned` state; this immediately frees the reserved filename and matches sweeper cleanup.                                                                          |
 | DEC-1 | **Settled**                | Permissioned shares now expose *both* revocations, because they mean different things: the per-recipient control ends one grant, and **Stop sharing** ends the share itself so a later invitation starts a new one rather than reopening the old. Covered by component and browser tests. |
 | CCP-9 | Applied                    | `packages/contracts` gained `isSafeReturnTo`, the one definition of "same-origin path", and `GoogleAuthQuery` now refines against it. A contract edit was unavoidable: the same rule is enforced on both sides of the OAuth round trip, and three independent copies of it are what let `/\evil.com` through the client while the server was never asked. Predicate only — no exported schema — so the frozen export inventory is unchanged. |
@@ -512,5 +513,4 @@ applications, generate and review tests, investigate failures, and maintain the 
 record. The workflow was contract → specification → failing test → implementation, with separate
 adversarial QA passes and coverage gates. AI output was treated as untrusted engineering work: behavior
 is accepted only when it is represented in the shared contract or a written deviation and exercised by
-the automated suite. External credentials, deployment ownership, and the remaining refresh-token policy
-decision stay with the project owner.
+the automated suite. External credentials and deployment ownership stay with the project owner.
