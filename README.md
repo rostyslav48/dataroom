@@ -248,7 +248,12 @@ pnpm test:e2e
 The stack it points at must have been started with `WEB_ORIGIN` equal to `E2E_WEB_URL`, for the CORS
 reason above; the browser-driven flows fail on the signed-out landing page otherwise.
 
-29 tests. Against a local stack, **25 pass and 4 skip**. The four are the flows that move bytes:
+The harness serializes independent Playwright processes on the same host before they can contend for
+the public share endpoint's per-IP rate limit. It keys the process lock by `E2E_API_URL`; when two
+aliases reach the same target, give both runs the same `E2E_SHARE_LOCK_KEY`. Distributed CI runners
+still need the CI provider's concurrency control because a host-local lock cannot cross machines.
+
+44 tests. Against a local stack, **40 pass and 4 skip**. The four are the flows that move bytes:
 `POST /uploads/init` mints a signed upload URL before it answers, so without a real Supabase bucket
 they fail on a 500 that says nothing about the behaviour under test. They are gated rather than left
 red — set `E2E_STORAGE_READY=true` once a bucket with CORS exists, and they run. Nothing else in the
