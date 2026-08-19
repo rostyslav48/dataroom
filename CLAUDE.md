@@ -154,6 +154,13 @@ empty, error and success tests · no stub presented as finished · committed wit
 - **The public-link limiter is real in tests too**: `/shared/:token` allows 10 requests a minute per
   IP, and a whole Playwright run shares one IP. A test that trips it reports `RATE_LIMITED` while
   asserting something else entirely.
+- **When a test contradicts the app, read the spec before you change the test.** Wave 8 relaxed a
+  rename assertion to match the shipped behaviour and wrote the reasoning into a comment; SPEC-07
+  had promised the opposite in prose and in an acceptance criterion. If the code has to win, that is
+  a CCP or a spec edit — never a comment in a test.
+- **A timing-sensitive assertion can pass against the bug it exists for.** The unit test for that
+  same rename sampled the input before the optimistic rollback re-rendered, so it was green on both
+  the broken and the fixed component. Wait for the state you are asserting about.
 - **`pkill -f vite` matches its own shell** and kills your background server with it. Use the
   harness's background runner, or a pattern that cannot self-match.
 - Per-track traps live in `apps/api/CLAUDE.md` and `apps/web/CLAUDE.md`. Read the one for your
