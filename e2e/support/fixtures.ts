@@ -5,7 +5,10 @@ import { fixtures } from './contracts';
 import { Api } from './api';
 import { env } from './env';
 import { signIn, type Session } from './session';
-import { protectShareResolveBrowserContext } from './shared-route';
+import {
+  assertShareResolveTopology,
+  protectShareResolveBrowserContext,
+} from './shared-route';
 import { ui, type Ui } from './selectors';
 import type { IdentityName } from './db';
 
@@ -50,7 +53,19 @@ interface Fixtures {
   scratch: Scratch;
 }
 
-export const test = base.extend<Fixtures>({
+interface WorkerFixtures {
+  shareResolveTopology: void;
+}
+
+export const test = base.extend<Fixtures, WorkerFixtures>({
+  shareResolveTopology: [
+    async ({}, use, workerInfo) => {
+      assertShareResolveTopology(workerInfo.config);
+      await use();
+    },
+    { scope: 'worker', auto: true },
+  ],
+
   ownerApi: async ({}, use) => {
     const api = await Api.as({ kind: 'user', identity: 'owner' });
     await use(api);

@@ -6,6 +6,7 @@ import { Api, env, expect, test } from '../support/fixtures';
 import { databaseAvailable, IDENTITIES, issueRefreshToken, upsertAllIdentities } from '../support/db';
 import { signAccessToken, signExpiredAccessToken } from '../support/jwt';
 import {
+  assertShareResolveTopology,
   protectShareResolveApiContext,
   protectShareResolveBrowserContext,
 } from '../support/shared-route';
@@ -116,15 +117,30 @@ test.describe('harness', () => {
     await api.dispose();
   });
 
+  test('the share-resolve coordinator requires one unsharded worker', () => {
+    expect(() => assertShareResolveTopology({ workers: 1, shard: null })).not.toThrow();
+    expect(() => assertShareResolveTopology({ workers: 2, shard: null })).toThrow(
+      /workers=1.*received 2/i,
+    );
+    expect(() =>
+      assertShareResolveTopology({ workers: 1, shard: { current: 1, total: 2 } }),
+    ).toThrow(/sharding.*not supported/i);
+  });
+
   test('share-resolve recovery covers refetches, pages, and direct API contexts', async ({
     browser,
   }) => {
     const statuses: number[] = [];
-    let requestCount = 0;
-    const server = createServer((_request, response) => {
-      requestCount += 1;
-      const status = requestCount % 2 === 1 ? 429 : 200;
+    const unguardedRequests: string[] = [];
+    let guardedRequestCount = 0;
+    const server = createServer((request, response) => {
+      const requestUrl = new URL(request.url ?? '/', 'http://127.0.0.1');
+      const guardedCandidate =
+        request.method === 'GET' && requestUrl.pathname === '/api/v1/shared/probe';
+      if (guardedCandidate) guardedRequestCount += 1;
+      const status = guardedCandidate && guardedRequestCount % 2 === 0 ? 200 : 429;
       statuses.push(status);
+      if (!guardedCandidate) unguardedRequests.push(`${request.method} ${requestUrl.pathname}`);
       response.writeHead(status, {
         'Access-Control-Allow-Origin': '*',
         'Content-Type': 'application/json',
@@ -146,6 +162,7 @@ test.describe('harness', () => {
     const address = server.address();
     expect(address && typeof address === 'object').toBe(true);
     const url = `http://127.0.0.1:${(address as { port: number }).port}/api/v1/shared/probe`;
+    const nonResolveUrl = `http://127.0.0.1:${(address as { port: number }).port}/api/v1/nodes/probe`;
     const browserContext = await browser.newContext();
     await protectShareResolveBrowserContext(browserContext);
     const page = await browserContext.newPage();
@@ -155,15 +172,28 @@ test.describe('harness', () => {
 
     try {
       const navigation = await page.goto(url);
-      const refetchStatus = await page.evaluate(async (shareUrl) => (await fetch(shareUrl)).status, url);
+      const refetchStatus = await page.evaluate(
+        async (shareUrl) => (await fetch(shareUrl)).status,
+        url,
+      );
       const secondNavigation = await secondPage.goto(url);
       const apiResponse = await api.get(url);
+      const fetchResponse = await api.fetch(url);
+      const postResponse = await api.fetch(url, { method: 'POST' });
+      const nonResolveResponse = await api.fetch(nonResolveUrl);
 
       expect(navigation?.status()).toBe(200);
       expect(refetchStatus).toBe(200);
       expect(secondNavigation?.status()).toBe(200);
       expect(apiResponse.status()).toBe(200);
-      expect(statuses).toEqual([429, 200, 429, 200, 429, 200, 429, 200]);
+      expect(fetchResponse.status()).toBe(200);
+      expect(postResponse.status()).toBe(429);
+      expect(nonResolveResponse.status()).toBe(429);
+      expect(statuses).toEqual([429, 200, 429, 200, 429, 200, 429, 200, 429, 200, 429, 429]);
+      expect(unguardedRequests).toEqual([
+        'POST /api/v1/shared/probe',
+        'GET /api/v1/nodes/probe',
+      ]);
       await expect(page.locator('body')).not.toContainText('RATE_LIMITED');
     } finally {
       await browserContext.close();

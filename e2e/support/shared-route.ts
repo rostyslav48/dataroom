@@ -4,6 +4,7 @@ import {
   type APIResponse,
   type BrowserContext,
   type Page,
+  type TestInfo,
 } from '@playwright/test';
 
 /**
@@ -25,6 +26,34 @@ const SHARE_RESOLVE_ROUTE = '**/api/v1/shared/**';
 const FALLBACK_RETRY_MS = 61_000;
 const WINDOW_BOUNDARY_BUFFER_MS = 1_000;
 const MAX_RATE_LIMIT_RECOVERIES = 3;
+
+export interface ShareResolveTopology {
+  workers: number;
+  shard: TestInfo['config']['shard'];
+}
+
+/**
+ * The coordinator below is deliberately process-local, so parallel Playwright processes would
+ * each keep a conflicting view of the same IP quota. Guard the topology instead of leaving the
+ * `workers: 1` config as an overrideable convention.
+ *
+ * Two entirely independent external Playwright invocations still cannot share memory. The first
+ * response headers (or a real 429) are how a new invocation learns the server state they left.
+ */
+export function assertShareResolveTopology({ workers, shard }: ShareResolveTopology): void {
+  if (workers !== 1) {
+    throw new Error(
+      `The E2E share-resolve coordinator requires workers=1 (received ${workers}); ` +
+        'its limiter state is process-local.',
+    );
+  }
+  if (shard !== null) {
+    throw new Error(
+      `Playwright sharding is not supported by the process-local share-resolve coordinator ` +
+        `(received shard ${shard.current}/${shard.total}).`,
+    );
+  }
+}
 
 interface RateLimitedResponse {
   status(): number;
@@ -168,10 +197,20 @@ export function protectShareResolveApiContext(context: APIRequestContext): APIRe
     const send = (): Promise<APIResponse> => context.get(url, options);
     return isShareResolveUrl(url) ? coordinator.run(send) : send();
   };
+  const guardedFetch: APIRequestContext['fetch'] = async (urlOrRequest, options) => {
+    const send = (): Promise<APIResponse> => context.fetch(urlOrRequest, options);
+    const url = typeof urlOrRequest === 'string' ? urlOrRequest : urlOrRequest.url();
+    const method =
+      options?.method ?? (typeof urlOrRequest === 'string' ? 'GET' : urlOrRequest.method());
+    return method.toUpperCase() === 'GET' && isShareResolveUrl(url)
+      ? coordinator.run(send)
+      : send();
+  };
 
   return new Proxy(context, {
     get(target, property) {
       if (property === 'get') return guardedGet;
+      if (property === 'fetch') return guardedFetch;
       const value = Reflect.get(target, property, target) as unknown;
       return typeof value === 'function' ? value.bind(target) : value;
     },
