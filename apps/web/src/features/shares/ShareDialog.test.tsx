@@ -230,6 +230,31 @@ describe('ShareDialog — people', () => {
     expect(state.shares).toHaveLength(before);
   });
 
+  it('refuses to invite the signed-in owner to their own share', async () => {
+    renderDialog(legal);
+    await screen.findByText('viewer@example.com');
+    const share = state.shares.find((candidate) => candidate.type === 'permissioned');
+    const before = share?.recipients.length ?? 0;
+
+    await userEvent.type(screen.getByLabelText('Invite by email'), 'owner@example.com{Enter}');
+    await userEvent.click(screen.getByRole('button', { name: 'Invite' }));
+
+    expect(await screen.findByText(/cannot invite yourself/)).toBeInTheDocument();
+    expect(share?.recipients).toHaveLength(before);
+  });
+
+  it('refuses to mint a new share whose only invitee is the owner', async () => {
+    renderDialog(overview);
+    await screen.findByText('Nobody has been invited to this item yet.');
+    const before = state.shares.length;
+
+    await userEvent.type(screen.getByLabelText('Invite by email'), 'owner@example.com{Enter}');
+    await userEvent.click(screen.getByRole('button', { name: 'Invite' }));
+
+    expect(await screen.findByText(/cannot invite yourself/)).toBeInTheDocument();
+    expect(state.shares).toHaveLength(before);
+  });
+
   it('revokes a recipient after confirming, and only then shows Revoked', async () => {
     renderDialog(legal);
     await screen.findByText('viewer@example.com');
@@ -240,6 +265,22 @@ describe('ShareDialog — people', () => {
 
     await userEvent.click(screen.getByRole('button', { name: 'Remove' }));
     expect(await screen.findByText('Revoked')).toBeInTheDocument();
+  });
+
+  it('lets a revoked address be invited again', async () => {
+    renderDialog(legal);
+    await screen.findByText('viewer@example.com');
+
+    await userEvent.click(screen.getByRole('button', { name: 'Remove access for viewer@example.com' }));
+    await userEvent.click(screen.getByRole('button', { name: 'Remove' }));
+    await screen.findByText('Revoked');
+
+    await userEvent.type(screen.getByLabelText('Invite by email'), 'viewer@example.com{Enter}');
+    expect(screen.queryByText(/has already been added/)).not.toBeInTheDocument();
+
+    await userEvent.click(screen.getByRole('button', { name: 'Invite' }));
+    expect(await screen.findByText('Active')).toBeInTheDocument();
+    expect(screen.queryByText('Revoked')).not.toBeInTheDocument();
   });
 
   it('can back out of revoking a recipient', async () => {

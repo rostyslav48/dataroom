@@ -97,6 +97,20 @@ function requireSession(): Response | null {
     : null;
 }
 
+/**
+ * The API refuses to make the room's owner a recipient of their own share — the row would grant
+ * nothing and cannot be revoked away. Mirrored here so the mocked app fails the same way.
+ */
+function rejectOwnAddress(emails: string[]): Response | null {
+  const self = Object.values(fixtures.users).find((user) => user.id === state.currentUserId);
+  if (self === undefined) return null;
+  return emails.some((email) => email.toLowerCase() === self.email.toLowerCase())
+    ? apiError('VALIDATION_FAILED', 'Cannot invite yourself', {
+        emails: ['You already have access to this as its owner, so you cannot invite yourself.'],
+      })
+    : null;
+}
+
 interface ResolvedAccess {
   access: AccessLevel;
   shareRootId: string;
@@ -747,6 +761,9 @@ const specs: HandlerSpec[] = [
           recipients: parsed.error.issues.map((issue) => issue.message),
         });
       }
+      const own = rejectOwnAddress(parsed.data.recipients);
+      if (own !== null) return own;
+
       const token = `MOCKTOKEN${mockUuid().replaceAll('-', '')}`;
       const shareId = mockUuid();
       const share: ShareDto = {
@@ -791,9 +808,17 @@ const specs: HandlerSpec[] = [
       if (share === undefined) return apiError('NOT_FOUND', 'No such share');
       const parsed = AddRecipientsBody.safeParse(await readBody(request));
       if (!parsed.success) return apiError('VALIDATION_FAILED', 'Invalid recipients');
+      const own = rejectOwnAddress(parsed.data.emails);
+      if (own !== null) return own;
       for (const email of parsed.data.emails) {
-        if (!share.recipients.some((recipient) => recipient.email === email)) {
+        // The API upserts: re-inviting a revoked address clears its `revoked_at` rather than
+        // adding a second row. Skipping the address instead would make the mocked app show a
+        // re-invitation doing nothing at all.
+        const existing = share.recipients.find((recipient) => recipient.email === email);
+        if (existing === undefined) {
           share.recipients.push(makeRecipient(email));
+        } else {
+          existing.revokedAt = null;
         }
       }
       return HttpResponse.json(share);

@@ -2,6 +2,7 @@ import { useState } from 'react';
 import type { ShareDto } from '@dataroom/contracts';
 import { Button } from '@/components/ui/Button';
 import { Skeleton } from '@/components/ui/Skeleton';
+import { isApiClientError } from '@/lib/api';
 import { presentError } from '@/lib/errorMap';
 import { EmailInput } from './EmailInput';
 import { RecipientRow } from './RecipientRow';
@@ -19,6 +20,16 @@ export interface SharePeopleTabProps {
   /** Revokes the whole share, ending access for everyone on it at once. */
   onRevokeShare: () => void;
   revokingShare: boolean;
+}
+
+/**
+ * An invitation is refused per address, so the server's field message ("you cannot invite
+ * yourself") is the one worth showing; `errorMap`'s title for `VALIDATION_FAILED` is deliberately
+ * generic and would say nothing about which address was the problem.
+ */
+function inviteMessage(error: unknown): string {
+  const detail = isApiClientError(error) ? error.details?.emails?.[0] : undefined;
+  return detail ?? presentError(error).title;
 }
 
 export function SharePeopleTab({
@@ -65,7 +76,9 @@ export function SharePeopleTab({
       <EmailInput
         emails={pending}
         onChange={setPending}
-        existing={recipients.map((recipient) => recipient.email)}
+        existing={recipients
+          .filter((recipient) => recipient.revokedAt === null)
+          .map((recipient) => recipient.email)}
         disabled={inviting}
       />
 
@@ -83,7 +96,7 @@ export function SharePeopleTab({
         </Button>
         {inviteError === null || inviteError === undefined ? null : (
           <span role="alert" className="text-sm text-danger">
-            {presentError(inviteError).title}
+            {inviteMessage(inviteError)}
           </span>
         )}
       </div>
