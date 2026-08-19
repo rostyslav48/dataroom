@@ -4,6 +4,7 @@ import { RouteParamtypes } from '@nestjs/common/enums/route-paramtypes.enum';
 import { ModulesContainer } from '@nestjs/core/injector/modules-container';
 import { z, type ZodTypeAny } from 'zod';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import * as contracts from '@dataroom/contracts';
 import {
   API_BASE,
   AddRecipientsBody,
@@ -68,6 +69,25 @@ const CONTRACT_REQUEST_SCHEMAS: Record<string, ZodTypeAny> = {
   'POST /api/v1/nodes/:id/shares': CreateShareBody,
   'POST /api/v1/shares/:id/recipients': AddRecipientsBody,
   'POST /api/v1/uploads/init': InitUploadBody,
+};
+
+/**
+ * Request schemas the frozen package exports that no route parameter validates, each with the
+ * reason it is not one — because "this endpoint has no `@Body`" and "this endpoint forgot its
+ * `@Body`" look identical from here, and the map above can only see routes that declare one.
+ *
+ * QA found the hole: a frozen schema absent from both the map and the controllers is invisible to
+ * every assertion in this file. Deleting `GoogleStartGuard`'s `safeParse` would have left the suite
+ * green. Listing the exceptions by name means adding a request schema without wiring it up fails
+ * here, and removing the enforcement behind one is at least a visible edit.
+ */
+const SCHEMAS_VALIDATED_OUTSIDE_A_ROUTE_PARAMETER: Record<string, string> = {
+  // A base other query schemas extend; never a request shape on its own.
+  PaginationQuery: 'composed into ListChildrenQuery',
+  // The OAuth start and callback read their query through Passport, not through a pipe:
+  // `GoogleStartGuard.validatedReturnTo` and `returnToFromState` both parse it with this schema.
+  // `test/integration/auth.test.ts` covers the open-redirect cases it exists to stop.
+  GoogleAuthQuery: 'parsed in the OAuth guards; see auth/google.guard.ts',
 };
 
 const signature = (method: string, path: string): string => `${method.toUpperCase()} ${path}`;
@@ -227,6 +247,31 @@ describe('contract — registered routes', () => {
 
     return parameters;
   };
+
+  it('accounts for every request schema the frozen contract exports', () => {
+    const isZodSchema = (value: unknown): boolean =>
+      typeof value === 'object' &&
+      value !== null &&
+      typeof (value as { safeParse?: unknown }).safeParse === 'function';
+
+    const exported = Object.entries(contracts)
+      .filter(([name, value]) => /(Body|Query)$/.test(name) && isZodSchema(value))
+      .map(([name]) => name)
+      .sort();
+
+    const mapped = new Map<unknown, string>(
+      Object.entries(contracts)
+        .filter(([name]) => /(Body|Query)$/.test(name))
+        .map(([name, value]) => [value, name]),
+    );
+    const validatedByARoute = Object.values(CONTRACT_REQUEST_SCHEMAS).map(
+      (schema) => mapped.get(schema) ?? '<not exported by the contract>',
+    );
+
+    expect(
+      [...validatedByARoute, ...Object.keys(SCHEMAS_VALIDATED_OUTSIDE_A_ROUTE_PARAMETER)].sort(),
+    ).toEqual(exported);
+  });
 
   it('registers exactly the endpoint contract plus the operational health probe', () => {
     const registered = controllerRoutes()
