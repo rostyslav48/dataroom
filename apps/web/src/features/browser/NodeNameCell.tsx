@@ -56,13 +56,32 @@ export function NodeNameCell({
 
   /**
    * A rejected commit has to be retryable. `committedRef` exists to stop blur from committing again
-   * after Enter already did, and it used to be cleared by the reseed above — which is the same
-   * effect that was eating the typing, so removing one without the other would leave the field open,
-   * the text intact, and every further Enter ignored.
+   * after Enter already did, and it used to be cleared by the seeding effect above — which is the
+   * same effect that was eating the typing, so removing one without the other would leave the field
+   * open, the text intact, and every further Enter ignored.
+   *
+   * Releasing it on `renameError` looked like the obvious replacement and was wrong: the message is
+   * a constant, so a *second* conflict sets state to the value it already held, React bails out, the
+   * effect never re-runs, and the field wedges shut for good — two guesses at a taken name and the
+   * row could not be renamed at all without pressing Escape and losing the typing. QA found it.
+   *
+   * The reliable signal is the one that is actually about a new attempt: the draft changing. Typing
+   * is what a retry is made of, and every path into this field — server rejection, client-side
+   * validation, a transient failure — goes through it.
+   */
+  const editDraft = (value: string): void => {
+    committedRef.current = false;
+    setDraft(value);
+  };
+
+  /**
+   * And the no-edit retry: a commit that settles while the field is still open (an error kept it
+   * open) releases the guard too, so pressing Enter twice on the same name after a transient failure
+   * is not silently ignored. `renameBusy` transitions, unlike the error string, are real events.
    */
   useEffect(() => {
-    if (renameError !== null && renameError !== undefined) committedRef.current = false;
-  }, [renameError]);
+    if (!renameBusy) committedRef.current = false;
+  }, [renameBusy]);
 
   useEffect(() => {
     if (!isRenaming) return;
@@ -97,7 +116,7 @@ export function NodeNameCell({
             invalid={renameError !== null && renameError !== undefined}
             aria-describedby={renameError === null || renameError === undefined ? undefined : `rename-error-${node.id}`}
             onChange={(event) => {
-              setDraft(event.target.value);
+              editDraft(event.target.value);
             }}
             onKeyDown={(event) => {
               if (event.key === 'Enter') {
