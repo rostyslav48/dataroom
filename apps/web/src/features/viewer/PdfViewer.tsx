@@ -38,7 +38,14 @@ export function PdfViewer({
     const token = tokenStore.get();
     if (token !== null) httpHeaders.Authorization = `Bearer ${token}`;
     if (shareToken !== undefined && shareToken !== '') httpHeaders[SHARE_TOKEN_HEADER] = shareToken;
-    return { url: fileUrl, httpHeaders, withCredentials: true };
+    /**
+     * Do not make this a credentialed request. The API leg is authenticated by the headers above,
+     * then redirects across origins to Supabase. Supabase's signed-object response permits CORS
+     * with `Access-Control-Allow-Origin: *`; browsers reject that response when pdf.js sets the
+     * credentials flag, even though the redirect stripped the API authorization header and the
+     * signed URL needs no cookie.
+     */
+    return { url: fileUrl, httpHeaders, withCredentials: false };
   }, [fileUrl, shareToken]);
 
   return (

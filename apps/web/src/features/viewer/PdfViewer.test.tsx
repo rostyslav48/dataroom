@@ -53,7 +53,9 @@ describe('PdfViewer', () => {
     );
 
     expect(captured.file?.httpHeaders.Authorization).toBe('Bearer viewer-token');
-    expect(captured.file?.withCredentials).toBe(true);
+    // The request redirects to signed storage whose wildcard CORS response is incompatible with
+    // credential mode `include`. Authorization authenticates the API leg; no cookie is needed.
+    expect(captured.file?.withCredentials).toBe(false);
     tokenStore.clear();
   });
 
