@@ -1,7 +1,7 @@
 import request from 'supertest';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { API_BASE, ApiError, SessionDto, UserDto, endpoints } from '@dataroom/contracts';
-import { ShareRecipientEntity, UserEntity } from '../../src/database/entities';
+import { RefreshTokenEntity, ShareRecipientEntity, UserEntity } from '../../src/database/entities';
 import type { GoogleIdentity } from '../../src/users/users.service';
 import { createTestHarness, httpServer, type TestHarness } from '../support/app';
 
@@ -384,6 +384,7 @@ describe('auth', () => {
 
     it('rejects a replayed token and kills the whole chain', async () => {
       const { cookie } = await signIn();
+      const refreshTokens = harness.dataSource.getRepository(RefreshTokenEntity);
 
       const first = await request(httpServer(harness))
         .post(url(endpoints.auth.refresh.path))
@@ -404,9 +405,16 @@ describe('auth', () => {
         .set('Cookie', cookie)
         .expect(401);
       expect(ApiError.parse(replay.body).code).toBe('UNAUTHENTICATED');
+      const family = await refreshTokens.find();
+      expect(family).toHaveLength(2);
+      expect(family.every((token) => token.revokedAt !== null)).toBe(true);
 
       // …and the token the legitimate client is holding is now dead too, because there is no way
       // to tell which of the two holders was the attacker.
+      await request(httpServer(harness))
+        .post(url(endpoints.auth.refresh.path))
+        .set('Cookie', cookie)
+        .expect(401);
       await request(httpServer(harness))
         .post(url(endpoints.auth.refresh.path))
         .set('Cookie', rotated)
@@ -415,18 +423,18 @@ describe('auth', () => {
 
     it('treats two tabs refreshing at the same moment as a race, not an attack', async () => {
       const { cookie } = await signIn();
+      const refreshTokens = harness.dataSource.getRepository(RefreshTokenEntity);
 
-      const first = await request(httpServer(harness))
-        .post(url(endpoints.auth.refresh.path))
-        .set('Cookie', cookie)
-        .expect(200);
-
-      // The second tab arrives moments later holding the same cookie. Revoking the family here
-      // would log the user out of both tabs for doing nothing wrong.
-      const second = await request(httpServer(harness))
-        .post(url(endpoints.auth.refresh.path))
-        .set('Cookie', cookie)
-        .expect(200);
+      const [first, second] = await Promise.all([
+        request(httpServer(harness))
+          .post(url(endpoints.auth.refresh.path))
+          .set('Cookie', cookie)
+          .expect(200),
+        request(httpServer(harness))
+          .post(url(endpoints.auth.refresh.path))
+          .set('Cookie', cookie)
+          .expect(200),
+      ]);
 
       const firstRotated = cookieValue(
         refreshCookie(first.headers as Record<string, unknown>) as string,
@@ -434,15 +442,45 @@ describe('auth', () => {
       const secondRotated = cookieValue(
         refreshCookie(second.headers as Record<string, unknown>) as string,
       );
-      expect(secondRotated).not.toBe(firstRotated);
+      expect(secondRotated).toBe(firstRotated);
+      expect(SessionDto.parse(second.body)).toEqual(SessionDto.parse(first.body));
 
-      // Both successors work, and both belong to the same live family.
-      for (const rotated of [firstRotated, secondRotated]) {
-        await request(httpServer(harness))
-          .post(url(endpoints.auth.refresh.path))
-          .set('Cookie', rotated)
-          .expect(200);
-      }
+      // Once the winning request has completed, the same predecessor is served from the completed
+      // cache rather than the in-flight handoff used by a truly concurrent request.
+      const cached = await request(httpServer(harness))
+        .post(url(endpoints.auth.refresh.path))
+        .set('Cookie', cookie)
+        .expect(200);
+      expect(cookieValue(refreshCookie(cached.headers as Record<string, unknown>) as string)).toBe(
+        firstRotated,
+      );
+      expect(SessionDto.parse(cached.body)).toEqual(SessionDto.parse(first.body));
+
+      // Sign-in inserted the predecessor and the winning exchange inserted exactly one successor.
+      // Later presenters received that same credential rather than minting another row.
+      expect(await refreshTokens.count()).toBe(2);
+    });
+
+    it('revokes the family when a recent exchange has no verifiable cached successor', async () => {
+      const { cookie } = await signIn();
+      const refreshTokens = harness.dataSource.getRepository(RefreshTokenEntity);
+
+      // Simulate an exchange completed by another process (or before a restart): the database row
+      // is inside the grace window, but this service never observed the claim and holds no plaintext
+      // successor it can safely share.
+      await harness.dataSource.query(
+        `UPDATE refresh_tokens SET used_at = now() WHERE used_at IS NULL`,
+      );
+
+      const replay = await request(httpServer(harness))
+        .post(url(endpoints.auth.refresh.path))
+        .set('Cookie', cookie)
+        .expect(401);
+      expect(ApiError.parse(replay.body).code).toBe('UNAUTHENTICATED');
+
+      const rows = await refreshTokens.find();
+      expect(rows).toHaveLength(1);
+      expect(rows[0]?.revokedAt).not.toBeNull();
     });
 
     it('rejects a missing cookie and an unknown token', async () => {

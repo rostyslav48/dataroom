@@ -19,15 +19,19 @@ export interface IssuedSession {
 /** Stored hashed: a leaked database row is then a useless string rather than a live session. */
 const hash = (token: string): string => createHash('sha256').update(token).digest('hex');
 
-/**
- * How long after a successful exchange a second presentation of the same token is still treated as
- * a race rather than a replay. Long enough for two tabs refreshing together, far too short to be
- * useful to an attacker who has to first obtain the cookie.
- */
+/** How long a process retains the exact successor issued for an exchanged token. */
 const REPLAY_GRACE_MS = 15_000;
+
+interface SuccessorCacheEntry {
+  issued: IssuedSession;
+  expiresAt: number;
+}
 
 @Injectable()
 export class TokensService {
+  private readonly successorCache = new Map<string, SuccessorCacheEntry>();
+  private readonly pendingSuccessors = new Map<string, Promise<IssuedSession>>();
+
   constructor(
     private readonly jwt: JwtService,
     private readonly config: AppConfig,
@@ -69,9 +73,10 @@ export class TokensService {
    * The claim is taken atomically — `UPDATE ... WHERE used_at IS NULL RETURNING` — so two
    * simultaneous refreshes cannot both succeed and then accuse each other of replay.
    *
-   * A token presented twice is the replay signature. The response is to revoke the *whole family*,
-   * not just that row: by then the attacker and the legitimate client hold tokens descended from
-   * the same login and there is no way to tell which is which, so both must be ended.
+   * A token presented twice is normally the replay signature. During the short browser-tab race
+   * window, this process can instead return the exact successor it already issued. It never mints
+   * an independent credential for the second presenter. If the successor cannot be verified from
+   * this process's memory, the response is still to revoke the *whole family*.
    */
   async rotate(presented: string): Promise<IssuedSession> {
     const tokenHash = hash(presented);
@@ -95,13 +100,14 @@ export class TokensService {
       if (existing?.usedAt) {
         const age = Date.now() - existing.usedAt.getTime();
         if (age <= REPLAY_GRACE_MS && existing.revokedAt === null) {
-          // Two tabs whose access tokens expired together both refresh; one wins the row lock and
-          // the other arrives moments later with the same cookie. That is not an attack, and
-          // treating it as one logs the user out of both tabs. Only an *older* replay is a signal.
-          const user = await this.refreshTokens.manager.findOne(UserEntity, {
-            where: { id: existing.userId },
-          });
-          if (user) return this.issue(user, existing.familyId);
+          const cached = this.readCachedSuccessor(tokenHash);
+          if (cached) return cached;
+
+          // The winning request may still be persisting its successor. This promise exists only
+          // when this process atomically claimed the row, so waiting for it preserves the same
+          // fail-closed guarantee as the completed cache.
+          const pending = this.pendingSuccessors.get(tokenHash);
+          if (pending) return pending;
         }
 
         await this.revokeFamily(existing.familyId);
@@ -110,12 +116,38 @@ export class TokensService {
       throw errors.unauthenticated('Your session has expired. Sign in again.');
     }
 
-    const user = await this.refreshTokens.manager.findOne(UserEntity, {
-      where: { id: row.user_id },
-    });
-    if (!user) throw errors.unauthenticated();
+    const pending = this.issueSuccessor(row.user_id, row.family_id);
+    this.pendingSuccessors.set(tokenHash, pending);
 
-    return this.issue(user, row.family_id);
+    try {
+      const issued = await pending;
+      this.cacheSuccessor(tokenHash, issued);
+      return issued;
+    } finally {
+      this.pendingSuccessors.delete(tokenHash);
+    }
+  }
+
+  private async issueSuccessor(userId: string, familyId: string): Promise<IssuedSession> {
+    const user = await this.refreshTokens.manager.findOne(UserEntity, { where: { id: userId } });
+    if (!user) throw errors.unauthenticated();
+    return this.issue(user, familyId);
+  }
+
+  private cacheSuccessor(tokenHash: string, issued: IssuedSession): void {
+    const now = Date.now();
+    for (const [cachedHash, entry] of this.successorCache) {
+      if (now > entry.expiresAt) this.successorCache.delete(cachedHash);
+    }
+    this.successorCache.set(tokenHash, { issued, expiresAt: now + REPLAY_GRACE_MS });
+  }
+
+  private readCachedSuccessor(tokenHash: string): IssuedSession | undefined {
+    const entry = this.successorCache.get(tokenHash);
+    if (!entry) return undefined;
+    if (Date.now() <= entry.expiresAt) return entry.issued;
+    this.successorCache.delete(tokenHash);
+    return undefined;
   }
 
   async revokeFamily(familyId: string): Promise<void> {
