@@ -107,6 +107,20 @@ describe('FolderPage', () => {
     expect(screen.getByTestId('pathname')).toHaveTextContent(`/s/${PUBLIC_LINK_TOKEN}`);
   });
 
+  it('renders a terminal gone state when the resolver proves the shared root is gone', async () => {
+    forceError('ITEM_GONE', { endpointKey: 'nodes.get' });
+    forceError('ITEM_GONE', { endpointKey: 'shares.resolve' });
+    renderWithProviders(<FolderPage nodeId={IDS.folderQ3} context={shareContext} />, {
+      route: `/s/${PUBLIC_LINK_TOKEN}/f/${IDS.folderQ3}`,
+    });
+
+    expect(await screen.findByText(/nothing else in this share to go back to/)).toBeInTheDocument();
+    expect(screen.getByText('This item was deleted by the owner')).toBeInTheDocument();
+    expect(
+      screen.queryByRole('button', { name: 'Back to the shared item' }),
+    ).not.toBeInTheDocument();
+  });
+
   it('renders the forbidden state for a node outside the caller’s grant', async () => {
     forceError('FORBIDDEN', { endpointKey: 'nodes.get' });
     renderFolder();

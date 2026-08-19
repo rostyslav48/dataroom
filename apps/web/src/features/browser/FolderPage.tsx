@@ -23,7 +23,10 @@ import { ShareDialog } from '@/features/shares/ShareDialog';
 import { AccessErrorScreen } from '@/features/shares/accessStates';
 import { SharedLayout } from '@/features/shares/SharedLayout';
 import { useSharedByName } from '@/features/shares/useSharedBy';
-import { useShareResolve } from '@/features/shares/useShareResolve';
+import {
+  shareResolveProvesRootGone,
+  useShareResolve,
+} from '@/features/shares/useShareResolve';
 
 export interface FolderPageProps {
   nodeId: string;
@@ -118,6 +121,7 @@ export function FolderPage({ nodeId, context }: FolderPageProps): JSX.Element {
           context={context}
           nodeId={nodeId}
           shareRootId={resolvedShare.data?.nodeId}
+          itemGoneIsShareRoot={shareResolveProvesRootGone(resolvedShare.error)}
           onRetry={() => {
             void detail.refetch();
           }}

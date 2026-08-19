@@ -8,7 +8,10 @@ import { useNodeDetail } from '@/features/browser/useNodeQueries';
 import { AccessErrorScreen } from '@/features/shares/accessStates';
 import { SharedLayout } from '@/features/shares/SharedLayout';
 import { useSharedByName } from '@/features/shares/useSharedBy';
-import { useShareResolve } from '@/features/shares/useShareResolve';
+import {
+  shareResolveProvesRootGone,
+  useShareResolve,
+} from '@/features/shares/useShareResolve';
 import { ViewerToolbar } from './ViewerToolbar';
 import { UnsupportedPreview } from './UnsupportedPreview';
 import { PdfErrorState } from './PdfErrorState';
@@ -76,6 +79,7 @@ export function FileViewerPage({ nodeId, context }: FileViewerPageProps): JSX.El
           context={context}
           nodeId={nodeId}
           shareRootId={resolvedShare.data?.nodeId}
+          itemGoneIsShareRoot={shareResolveProvesRootGone(resolvedShare.error)}
           onRetry={() => {
             void detail.refetch();
           }}

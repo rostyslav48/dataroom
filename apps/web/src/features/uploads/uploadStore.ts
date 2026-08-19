@@ -73,11 +73,14 @@ let invalidator: InvalidateFolder | null = null;
 
 export const useUploadStore = create<UploadStore>()((set, get) => {
   const patch = (localId: string, changes: ItemPatch): void => {
-    set((state) => ({
-      items: state.items.map((item) =>
-        item.localId === localId ? applyPatch(item, changes) : item,
-      ),
-    }));
+    set((state) => {
+      if (!state.items.some((item) => item.localId === localId)) return state;
+      return {
+        items: state.items.map((item) =>
+          item.localId === localId ? applyPatch(item, changes) : item,
+        ),
+      };
+    });
   };
 
   const failure = (error: unknown): { code: string; message: string } => {
@@ -246,8 +249,11 @@ export const useUploadStore = create<UploadStore>()((set, get) => {
     },
 
     dismiss: (localId) => {
+      const xhr = inFlight.get(localId);
       inFlight.delete(localId);
       set((state) => ({ items: state.items.filter((item) => item.localId !== localId) }));
+      xhr?.abort();
+      pump();
     },
 
     clearFinished: () => {

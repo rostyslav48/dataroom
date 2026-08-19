@@ -300,6 +300,54 @@ describe('queue bookkeeping', () => {
     unsubscribe();
   });
 
+  it('retires an in-flight PUT when its row is dismissed', async () => {
+    store().enqueue([pdf('dismissed.pdf')], IDS.rootNode);
+    await waitFor(() => {
+      expect(FakeXhr.instances).toHaveLength(1);
+    });
+
+    const xhr = FakeXhr.last();
+    const localId = store().items[0]?.localId ?? '';
+    const updates = vi.fn();
+    const unsubscribe = useUploadStore.subscribe(updates);
+    store().dismiss(localId);
+    const updatesAtDismiss = updates.mock.calls.length;
+
+    expect(xhr.aborted).toBe(true);
+    xhr.emitProgress(512, 1024);
+    xhr.succeed();
+    await new Promise<void>((resolve) => {
+      setTimeout(resolve, 0);
+    });
+
+    expect(store().items).toEqual([]);
+    expect(updates).toHaveBeenCalledTimes(updatesAtDismiss);
+    unsubscribe();
+  });
+
+  it('pumps the next queued upload after an active row is dismissed', async () => {
+    store().enqueue(
+      Array.from({ length: UPLOAD_CONCURRENCY + 1 }, (_, index) =>
+        pdf(`dismiss-${String(index)}.pdf`),
+      ),
+      IDS.rootNode,
+    );
+    await waitFor(() => {
+      expect(FakeXhr.instances).toHaveLength(UPLOAD_CONCURRENCY);
+    });
+
+    const dismissedXhr = FakeXhr.instances[0];
+    store().dismiss(store().items[0]?.localId ?? '');
+
+    expect(dismissedXhr?.aborted).toBe(true);
+    await waitFor(() => {
+      expect(FakeXhr.instances).toHaveLength(UPLOAD_CONCURRENCY + 1);
+    });
+    expect(store().items.filter((item) => item.status === 'uploading')).toHaveLength(
+      UPLOAD_CONCURRENCY,
+    );
+  });
+
   it('keeps the queue across a folder change, because it lives outside the page', async () => {
     store().enqueue([pdf('a.pdf')], IDS.rootNode);
     await waitFor(() => {
