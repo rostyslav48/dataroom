@@ -73,12 +73,13 @@ test.describe('flow 1 — folder lifecycle', () => {
       await ui.renameInput.fill('Reports');
       await ui.renameInput.press('Enter');
       await expect(ui.renameError).toBeVisible();
-      // The field stays open so the name can be corrected in place, and the optimistic rename rolls
-      // back to the committed name — SPEC-07's "optimistic rename rolls back visibly on error".
-      // The rejected text is *not* kept: rollback restores `node.name`, and the field is seeded
-      // from it. Asserting the typing survived would be asserting against the rollback.
+      // SPEC-07, twice over: "keeps the input open with the text preserved — a toast would lose the
+      // user's typing", and the acceptance criterion of the same name. Wave 8 relaxed this to
+      // `'Contracts'` after observing the shipped behaviour and calling the rollback responsible;
+      // QA caught that the spec had promised otherwise. The rollback restores the *row*, not the
+      // field — the row is `Contracts` again, and the field still holds what was typed.
       await expect(ui.renameInput).toBeVisible();
-      await expect(ui.renameInput).toHaveValue('Contracts');
+      await expect(ui.renameInput).toHaveValue('Reports');
       await expect(ui.rowByName('Reports')).toHaveCount(1);
 
       await ui.renameInput.fill('Agreements');
