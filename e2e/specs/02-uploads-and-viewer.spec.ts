@@ -2,6 +2,12 @@ import { expect, openAs, routes, test } from '../support/fixtures';
 import { storageReady } from '../support/env';
 import { pdfFile, textFile } from '../support/pdf';
 
+interface UploadProgressSample {
+  loaded: number;
+  total: number;
+  lengthComputable: boolean;
+}
+
 /**
  * FLOW 2 — upload 3 PDFs at once → watch progress → open one in the viewer → download another.
  *
@@ -34,12 +40,44 @@ test.describe('flow 2 — uploads and viewer', () => {
     }) => {
       const { context, page, ui } = await openAs(browser, 'owner');
       const files = [
-        pdfFile('alpha.pdf', 'Alpha'),
+        // Large enough that the browser's upload machinery has a representative payload rather
+        // than a sub-kilobyte request it can complete before emitting useful telemetry.
+        pdfFile('alpha.pdf', 'Alpha', 4 * 1024 * 1024),
         pdfFile('beta.pdf', 'Beta'),
         pdfFile('gamma.pdf', 'Gamma'),
       ];
+      const progressSamples: UploadProgressSample[] = [];
 
       try {
+        // Observe the browser's native upload target without replacing XHR or changing production
+        // code. A final queue state alone is insufficient evidence: `putWithProgress` also writes
+        // 100 after `load`, so the UI could say Done even if `xhr.upload.onprogress` never fired.
+        await page.exposeFunction('__e2eRecordUploadProgress', (sample: UploadProgressSample) => {
+          progressSamples.push(sample);
+        });
+        await page.addInitScript(() => {
+          const originalSend = XMLHttpRequest.prototype.send;
+          XMLHttpRequest.prototype.send = function (
+            body?: Document | XMLHttpRequestBodyInit | null,
+          ): void {
+            this.upload.addEventListener('progress', (event) => {
+              const sink = globalThis as typeof globalThis & {
+                __e2eRecordUploadProgress: (sample: {
+                  loaded: number;
+                  total: number;
+                  lengthComputable: boolean;
+                }) => Promise<void>;
+              };
+              void sink.__e2eRecordUploadProgress({
+                loaded: event.loaded,
+                total: event.total,
+                lengthComputable: event.lengthComputable,
+              });
+            });
+            originalSend.call(this, body);
+          };
+        });
+
         await page.goto(routes.folder(room.room.id, scratch.folder.id));
         await expect(ui.nodeTable).toBeVisible();
 
@@ -54,6 +92,23 @@ test.describe('flow 2 — uploads and viewer', () => {
           });
           await expect(ui.rowByName(file.name)).toBeVisible();
         }
+
+        const representativeBytes = files[0]!.buffer.byteLength;
+        await expect
+          .poll(
+            () =>
+              progressSamples.some(
+                (sample) =>
+                  sample.lengthComputable &&
+                  sample.loaded > 0 &&
+                  sample.total === representativeBytes,
+              ),
+            {
+              message:
+                'the raw browser PUT must emit xhr.upload.onprogress for the representative PDF',
+            },
+          )
+          .toBe(true);
 
         // ── open one in the viewer ─────────────────────────────────────────
         await ui.openRow('beta.pdf').click();
