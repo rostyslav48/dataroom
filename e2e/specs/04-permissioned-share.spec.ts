@@ -125,6 +125,33 @@ test.describe('flow 4 — permissioned share to a second account', () => {
     expect((await strangerApi.node(node.id)).access).toBe('viewer');
   });
 
+  test('the owner can end the whole share at once, and every recipient loses access', async ({
+    ownerApi,
+    viewerApi,
+    strangerApi,
+    scratch,
+  }) => {
+    // Per-recipient removal and whole-share revocation are different actions with different
+    // meanings, and the UI exposes both: removing people one at a time is the ordinary case, and
+    // this is the "take it back from everyone, now" case. An owner under time pressure should not
+    // have to click once per invitee to get there.
+    const node = await ownerApi.createFolder(scratch.folder.id, 'Everyone Out');
+    const share = await ownerApi.createPermissionedShare(node.id, [
+      fixtures.users.viewer.email,
+      fixtures.users.stranger.email,
+    ]);
+
+    expect((await viewerApi.node(node.id)).access).toBe('viewer');
+    expect((await strangerApi.node(node.id)).access).toBe('viewer');
+
+    await ownerApi.revokeShare(share.id);
+
+    await viewerApi.expectDenied('get', `/nodes/${node.id}`, 'ACCESS_REVOKED');
+    await strangerApi.expectDenied('get', `/nodes/${node.id}`, 'ACCESS_REVOKED');
+    // The owner is unaffected: revoking a share never touches ownership.
+    expect((await ownerApi.node(node.id)).access).toBe('owner');
+  });
+
   /**
    * Signed in with the wrong Google account.
    *

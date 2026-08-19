@@ -21,12 +21,22 @@ import type { Locator, Page } from '@playwright/test';
  * folders may legitimately share a name across a move, and matching on text alone makes a rename
  * test assert against the wrong row.
  *
- * ## Still unverified
+ * ## What changed after the first storage-enabled run
  *
- * The upload queue and the PDF viewer locators cannot be exercised until a real storage bucket
- * exists (HUMAN-3): `POST /uploads/init` mints a signed URL, and against a placeholder Supabase
- * host that call 500s before any UI appears. Those entries are marked below and remain predictions
- * — do not read a green suite as covering them.
+ * Two locators here were still predictions, and both failed the first time a real bucket let them
+ * run — *after* the behaviour they were checking had already appeared on screen:
+ *
+ *   - `uploadItems` fell back to filtering list items by `%|uploading|done`, and the completed
+ *     row's label is **Uploaded**. Fast uploads therefore vanished from the locator the moment they
+ *     finished, and a three-file count assertion failed against three visible rows.
+ *   - `downloadButton` matched by accessible name, and two buttons legitimately say "Download":
+ *     the viewer toolbar's and the unsupported-preview CTA. Playwright strict mode failed on the
+ *     ambiguity rather than on anything the product did wrong.
+ *
+ * Both are now addressed by test ids that the app carries (`upload-item`, `upload-queue`,
+ * `toolbar-download`, `unsupported-download`) rather than by text that is a label today and
+ * something else after the next copy edit. `uploadItemsByStatus` reads `data-upload-status`, so a
+ * test can wait for a terminal state instead of racing the label.
  */
 
 export const routes = {
@@ -104,18 +114,28 @@ export function ui(page: Page) {
     // `Upload` must be exact: the dropzone renders a second button, "Choose files to upload".
     uploadButton: main.getByRole('button', { name: 'Upload', exact: true }),
     fileInput: page.locator('input[type="file"]'),
-    // UNVERIFIED — needs a real storage bucket (HUMAN-3). See the header note.
-    uploadQueue: page.getByTestId('upload-queue').or(page.getByRole('region', { name: /upload/i })),
-    uploadItems: page.getByTestId('upload-item').or(page.getByRole('listitem').filter({ hasText: /%|uploading|done/i })),
+    uploadQueue: page.getByTestId('upload-queue'),
+    // Scoped to the queue, so a list item anywhere else on the page can never be counted as one.
+    uploadItems: page.getByTestId('upload-queue').getByTestId('upload-item'),
     uploadItemByName: (name: string) =>
-      page.getByTestId('upload-item').or(page.getByRole('listitem')).filter({ hasText: name }),
+      page.getByTestId('upload-queue').getByTestId('upload-item').filter({ hasText: name }),
+    /**
+     * Rows in a given lifecycle state, read off `data-upload-status` rather than off the visible
+     * label. `done` is rendered as "Uploaded"; matching the word is how the old locator lost every
+     * row that finished quickly.
+     */
+    uploadItemsByStatus: (status: 'queued' | 'uploading' | 'done' | 'error') =>
+      page.getByTestId('upload-queue').locator(`[data-upload-status="${status}"]`),
 
     // ── viewer ──────────────────────────────────────────────────────────
     // UNVERIFIED for the same reason: react-pdf's own class names, since the app adds no test id.
     pdfViewer: page.locator('.react-pdf__Document'),
     pdfPage: page.locator('.react-pdf__Page'),
-    unsupportedPreview: page.getByText(/only pdfs can be previewed here/i),
-    downloadButton: page.getByRole('button', { name: /^download$/i }),
+    unsupportedPreview: page.getByTestId('unsupported-preview'),
+    // Two buttons in this app say "Download" and both are legitimate. Address them separately
+    // rather than letting a strict-mode violation stand in for a product failure.
+    downloadButton: page.getByTestId('toolbar-download'),
+    unsupportedDownloadButton: page.getByTestId('unsupported-download'),
 
     // ── sharing ─────────────────────────────────────────────────────────
     shareButton: main.getByRole('button', { name: 'Share', exact: true }),
@@ -129,6 +149,8 @@ export function ui(page: Page) {
      * both steps carry the same accessible name and only one of them is on screen at a time.
      */
     shareRevoke: page.getByRole('button', { name: /revoke link/i }),
+    /** Ends the whole permissioned share — everyone at once, not one recipient at a time. */
+    shareStopSharing: page.getByRole('button', { name: /^stop sharing$/i }),
     shareRevokeConfirm: page.getByRole('button', { name: /revoke link/i }),
     recipientEmailInput: page.getByRole('textbox', { name: /invite by email/i }),
     /** Typing an address only queues it; the share is created when this is pressed. */

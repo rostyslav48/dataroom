@@ -86,10 +86,12 @@ test.describe('flow 2 — uploads and viewer', () => {
         await ui.fileInput.setInputFiles(files);
         await expect(ui.uploadItems).toHaveCount(3);
 
+        // `data-upload-status`, not the label. The row reads "Uploaded" when it finishes, and the
+        // status attribute is the thing the test is actually about — a copy edit should not be able
+        // to turn this assertion green or red.
+        await expect(ui.uploadItemsByStatus('done')).toHaveCount(3, { timeout: 60_000 });
         for (const file of files) {
-          await expect(ui.uploadItemByName(file.name)).toContainText(/done|complete|uploaded/i, {
-            timeout: 60_000,
-          });
+          await expect(ui.uploadItemByName(file.name)).toHaveAttribute('data-upload-status', 'done');
           await expect(ui.rowByName(file.name)).toBeVisible();
         }
 
@@ -145,8 +147,18 @@ test.describe('flow 2 — uploads and viewer', () => {
 
         await ui.openRow('notes.txt').click();
         await expect(ui.unsupportedPreview).toBeVisible();
-        await expect(ui.downloadButton).toBeVisible();
+        // The CTA inside the fallback, not "whichever button says Download" — the viewer toolbar
+        // carries one too, and matching on the name made this a strict-mode failure rather than an
+        // assertion about the fallback.
+        await expect(ui.unsupportedDownloadButton).toBeVisible();
         await expect(ui.pdfViewer).toHaveCount(0);
+
+        // And it downloads the bytes it offers. The fallback existing is only half the promise.
+        const [download] = await Promise.all([
+          page.waitForEvent('download'),
+          ui.unsupportedDownloadButton.click(),
+        ]);
+        expect(download.suggestedFilename()).toBe('notes.txt');
       } finally {
         await context.close();
       }
