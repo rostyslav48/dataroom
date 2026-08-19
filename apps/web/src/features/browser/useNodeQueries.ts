@@ -19,6 +19,19 @@ export interface ChildrenParams {
   dir: 'asc' | 'desc';
 }
 
+/**
+ * `staleTime: 0` on both node queries, against the client's 10-second default.
+ *
+ * `06-edge-cases.md` decides the delete-while-viewing case outright — the viewer's next request or
+ * focus-refetch gets `410 ITEM_GONE` and the gone state renders, "**never a blank screen or a stale
+ * cache**". `refetchOnWindowFocus` alone does not deliver that: TanStack Query skips the refetch
+ * while the data is still fresh, so for ten seconds after a deletion tabbing back did nothing and
+ * the viewer went on reading a folder that no longer existed.
+ *
+ * Scoped to the node reads rather than raised to `refetchOnWindowFocus: 'always'` globally, because
+ * `/shared/:token` is rate-limited to 10 requests a minute per IP and refetching *it* on every focus
+ * would spend that budget on a value that does not change.
+ */
 export function useNodeDetail(
   nodeId: string,
   shareToken?: string | undefined,
@@ -26,6 +39,7 @@ export function useNodeDetail(
   return useQuery({
     queryKey: qk.node(nodeId),
     queryFn: ({ signal }) => getNode(nodeId, { shareToken }, signal),
+    staleTime: 0,
   });
 }
 
@@ -50,6 +64,7 @@ export function useChildren(
         signal,
       ),
     getNextPageParam: (lastPage: ListChildrenResponse) => lastPage.nextCursor,
+    staleTime: 0,
   });
 }
 
