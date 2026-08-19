@@ -3,7 +3,8 @@ import { METHOD_METADATA, PATH_METADATA, ROUTE_ARGS_METADATA } from '@nestjs/com
 import { RouteParamtypes } from '@nestjs/common/enums/route-paramtypes.enum';
 import { ModulesContainer } from '@nestjs/core/injector/modules-container';
 import { z, type ZodTypeAny } from 'zod';
-import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import request from 'supertest';
+import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import * as contracts from '@dataroom/contracts';
 import {
   API_BASE,
@@ -11,15 +12,18 @@ import {
   CreateDataRoomBody,
   CreateFolderBody,
   CreateShareBody,
+  GoogleAuthQuery,
   InitUploadBody,
   ListChildrenQuery,
   MoveNodeBody,
+  PaginationQuery,
   RenameNodeBody,
   UpdateDataRoomBody,
   endpoints,
 } from '@dataroom/contracts';
+import { encodeState, returnToFromState } from '../../src/auth/return-to';
 import { ZodValidationPipe, validate } from '../../src/common/zod-validation.pipe';
-import { createTestHarness, type TestHarness } from '../support/app';
+import { createTestHarness, httpServer, type TestHarness } from '../support/app';
 
 interface RouteArgument {
   index: number;
@@ -43,6 +47,18 @@ interface RequestParameter {
   pipes: unknown[];
 }
 
+interface RequestSchemaExpectation {
+  exportName: string;
+  kind: RequestParameter['kind'];
+  schema: ZodTypeAny;
+}
+
+interface SchemaClassification {
+  name: string;
+  schema: ZodTypeAny;
+  usage: 'route request' | 'composition only' | 'outside-route validation' | 'not a request';
+}
+
 /**
  * Route signature → the **exact** frozen request schema that route must validate with.
  *
@@ -59,35 +75,116 @@ interface RequestParameter {
  *   check would pass every time. Reference identity is the only comparison that proves the running
  *   controller reached into the frozen package rather than into something that merely resembles it.
  */
-const CONTRACT_REQUEST_SCHEMAS: Record<string, ZodTypeAny> = {
-  'GET /api/v1/nodes/:id/children': ListChildrenQuery,
-  'PATCH /api/v1/data-rooms/:id': UpdateDataRoomBody,
-  'PATCH /api/v1/nodes/:id': RenameNodeBody,
-  'POST /api/v1/data-rooms': CreateDataRoomBody,
-  'POST /api/v1/folders': CreateFolderBody,
-  'POST /api/v1/nodes/:id/move': MoveNodeBody,
-  'POST /api/v1/nodes/:id/shares': CreateShareBody,
-  'POST /api/v1/shares/:id/recipients': AddRecipientsBody,
-  'POST /api/v1/uploads/init': InitUploadBody,
+const CONTRACT_REQUEST_SCHEMAS: Record<string, RequestSchemaExpectation> = {
+  'GET /api/v1/nodes/:id/children': {
+    exportName: 'ListChildrenQuery',
+    kind: 'query',
+    schema: ListChildrenQuery,
+  },
+  'PATCH /api/v1/data-rooms/:id': {
+    exportName: 'UpdateDataRoomBody',
+    kind: 'body',
+    schema: UpdateDataRoomBody,
+  },
+  'PATCH /api/v1/nodes/:id': {
+    exportName: 'RenameNodeBody',
+    kind: 'body',
+    schema: RenameNodeBody,
+  },
+  'POST /api/v1/data-rooms': {
+    exportName: 'CreateDataRoomBody',
+    kind: 'body',
+    schema: CreateDataRoomBody,
+  },
+  'POST /api/v1/folders': {
+    exportName: 'CreateFolderBody',
+    kind: 'body',
+    schema: CreateFolderBody,
+  },
+  'POST /api/v1/nodes/:id/move': {
+    exportName: 'MoveNodeBody',
+    kind: 'body',
+    schema: MoveNodeBody,
+  },
+  'POST /api/v1/nodes/:id/shares': {
+    exportName: 'CreateShareBody',
+    kind: 'body',
+    schema: CreateShareBody,
+  },
+  'POST /api/v1/shares/:id/recipients': {
+    exportName: 'AddRecipientsBody',
+    kind: 'body',
+    schema: AddRecipientsBody,
+  },
+  'POST /api/v1/uploads/init': {
+    exportName: 'InitUploadBody',
+    kind: 'body',
+    schema: InitUploadBody,
+  },
 };
 
 /**
- * Request schemas the frozen package exports that no route parameter validates, each with the
- * reason it is not one — because "this endpoint has no `@Body`" and "this endpoint forgot its
- * `@Body`" look identical from here, and the map above can only see routes that declare one.
+ * Request schemas the frozen package exports that no route parameter validates. These are typed
+ * references rather than explanatory strings so the inventory can prove identity and exclusive
+ * classification mechanically.
  *
  * QA found the hole: a frozen schema absent from both the map and the controllers is invisible to
  * every assertion in this file. Deleting `GoogleStartGuard`'s `safeParse` would have left the suite
- * green. Listing the exceptions by name means adding a request schema without wiring it up fails
- * here, and removing the enforcement behind one is at least a visible edit.
+ * green. The checks below now exercise both actual OAuth parsing sites through the exact frozen
+ * object, rather than treating a name and comment as proof.
  */
-const SCHEMAS_VALIDATED_OUTSIDE_A_ROUTE_PARAMETER: Record<string, string> = {
-  // A base other query schemas extend; never a request shape on its own.
-  PaginationQuery: 'composed into ListChildrenQuery',
+const COMPOSITION_ONLY_REQUEST_SCHEMAS = {
+  // `PaginationQuery.extend(...)` copies these exact field schema objects into the concrete query.
+  PaginationQuery: { schema: PaginationQuery, composedInto: ListChildrenQuery },
+};
+
+const SCHEMAS_VALIDATED_OUTSIDE_A_ROUTE_PARAMETER = {
   // The OAuth start and callback read their query through Passport, not through a pipe:
   // `GoogleStartGuard.validatedReturnTo` and `returnToFromState` both parse it with this schema.
   // `test/integration/auth.test.ts` covers the open-redirect cases it exists to stop.
-  GoogleAuthQuery: 'parsed in the OAuth guards; see auth/google.guard.ts',
+  GoogleAuthQuery: { schema: GoogleAuthQuery },
+};
+
+/**
+ * Every exported Zod schema that is not an inbound request schema. This deliberately names every
+ * export instead of guessing from suffixes: adding `StartOAuthInput`, or any other newly named Zod
+ * schema, leaves it unclassified and fails the inventory test.
+ */
+const NON_REQUEST_SCHEMA_EXPORTS: Record<string, ZodTypeAny> = {
+  AccessLevel: contracts.AccessLevel,
+  AllowedMimeType: contracts.AllowedMimeType,
+  ApiError: contracts.ApiError,
+  BreadcrumbDto: contracts.BreadcrumbDto,
+  CompleteUploadResponse: contracts.CompleteUploadResponse,
+  Cursor: contracts.Cursor,
+  DataRoomDto: contracts.DataRoomDto,
+  DeletePreviewDto: contracts.DeletePreviewDto,
+  Email: contracts.Email,
+  ErrorCode: contracts.ErrorCode,
+  InitUploadResponse: contracts.InitUploadResponse,
+  IsoDateTime: contracts.IsoDateTime,
+  ListChildrenResponse: contracts.ListChildrenResponse,
+  ListDataRoomsResponse: contracts.ListDataRoomsResponse,
+  ListSharesResponse: contracts.ListSharesResponse,
+  MeResponse: contracts.MeResponse,
+  NodeDetailResponse: contracts.NodeDetailResponse,
+  NodeDto: contracts.NodeDto,
+  NodeListItem: contracts.NodeListItem,
+  NodeSortField: contracts.NodeSortField,
+  NodeStatsDto: contracts.NodeStatsDto,
+  NodeType: contracts.NodeType,
+  RefreshResponse: contracts.RefreshResponse,
+  ResolveShareResponse: contracts.ResolveShareResponse,
+  ResourceName: contracts.ResourceName,
+  RetryUploadResponse: contracts.RetryUploadResponse,
+  SessionDto: contracts.SessionDto,
+  ShareDto: contracts.ShareDto,
+  ShareRecipientDto: contracts.ShareRecipientDto,
+  ShareRole: contracts.ShareRole,
+  ShareType: contracts.ShareType,
+  UploadStatus: contracts.UploadStatus,
+  UserDto: contracts.UserDto,
+  Uuid: contracts.Uuid,
 };
 
 const signature = (method: string, path: string): string => `${method.toUpperCase()} ${path}`;
@@ -107,6 +204,88 @@ const pathsOf = (metadata: unknown): string[] =>
 const isZodPipe = (pipe: unknown): pipe is ZodValidationPipe<unknown, unknown> =>
   pipe instanceof ZodValidationPipe;
 
+const isZodSchema = (value: unknown): value is ZodTypeAny =>
+  typeof value === 'object' &&
+  value !== null &&
+  typeof (value as { safeParse?: unknown }).safeParse === 'function';
+
+const schemaClassifications = (): SchemaClassification[] => [
+  ...Object.entries(NON_REQUEST_SCHEMA_EXPORTS).map(([name, schema]) => ({
+    name,
+    schema,
+    usage: 'not a request' as const,
+  })),
+  ...Object.values(CONTRACT_REQUEST_SCHEMAS).map(({ exportName: name, schema }) => ({
+    name,
+    schema,
+    usage: 'route request' as const,
+  })),
+  ...Object.entries(COMPOSITION_ONLY_REQUEST_SCHEMAS).map(([name, { schema }]) => ({
+    name,
+    schema,
+    usage: 'composition only' as const,
+  })),
+  ...Object.entries(SCHEMAS_VALIDATED_OUTSIDE_A_ROUTE_PARAMETER).map(([name, { schema }]) => ({
+    name,
+    schema,
+    usage: 'outside-route validation' as const,
+  })),
+];
+
+const schemaExportViolations = (
+  exports: Record<string, unknown>,
+  classifications: SchemaClassification[],
+): string[] => {
+  const violations: string[] = [];
+  const exported = new Map(Object.entries(exports).filter(([, value]) => isZodSchema(value)));
+  const classificationsByName = new Map<string, SchemaClassification[]>();
+
+  for (const classification of classifications) {
+    const sameName = classificationsByName.get(classification.name) ?? [];
+    sameName.push(classification);
+    classificationsByName.set(classification.name, sameName);
+  }
+
+  for (const [name, schema] of exported) {
+    const matching = classificationsByName.get(name) ?? [];
+    if (matching.length === 0) {
+      violations.push(`${name} — exported Zod schema is not explicitly classified`);
+    } else if (matching.length !== 1) {
+      violations.push(
+        `${name} — exported Zod schema must have exactly one classification, found ${matching.length}: ${matching.map(({ usage }) => usage).join(', ')}`,
+      );
+    } else if (matching[0]?.schema !== schema) {
+      violations.push(`${name} — classification does not reference the exact exported schema`);
+    }
+  }
+  for (const name of classificationsByName.keys()) {
+    if (!exported.has(name)) violations.push(`${name} — classified Zod schema is not exported`);
+  }
+
+  return violations.sort();
+};
+
+const compositionViolations = (
+  compositions: Record<
+    string,
+    { schema: z.AnyZodObject; composedInto: z.AnyZodObject }
+  > = COMPOSITION_ONLY_REQUEST_SCHEMAS,
+): string[] => {
+  const violations: string[] = [];
+
+  for (const [name, { schema, composedInto }] of Object.entries(compositions)) {
+    for (const [field, fieldSchema] of Object.entries(schema.shape)) {
+      if (composedInto.shape[field] !== fieldSchema) {
+        violations.push(
+          `${name}.${field} — composition target does not reuse the exact frozen field schema`,
+        );
+      }
+    }
+  }
+
+  return violations.sort();
+};
+
 /**
  * Every way a route's request validation can disagree with the contract, as a list of readable
  * strings. A function rather than a chain of `expect`s so the mutation test below can run the very
@@ -114,20 +293,42 @@ const isZodPipe = (pipe: unknown): pipe is ZodValidationPipe<unknown, unknown> =
  */
 const schemaViolations = (
   parameters: RequestParameter[],
-  expected: Record<string, ZodTypeAny>,
+  expected: Record<string, RequestSchemaExpectation>,
 ): string[] => {
   const violations: string[] = [];
-  const covered = new Set<string>();
+  const parametersByRoute = new Map<string, RequestParameter[]>();
 
   for (const parameter of parameters) {
-    const label = `${parameter.route} — ${parameter.kind} parameter ${parameter.index}`;
-    const contractSchema = expected[parameter.route];
+    const routeParameters = parametersByRoute.get(parameter.route) ?? [];
+    routeParameters.push(parameter);
+    parametersByRoute.set(parameter.route, routeParameters);
+  }
 
-    if (contractSchema === undefined) {
-      violations.push(`${label} — accepts a payload no endpoint contract schema covers`);
+  for (const [route, routeParameters] of parametersByRoute) {
+    if (expected[route] !== undefined) continue;
+    for (const parameter of routeParameters) {
+      violations.push(
+        `${route} — ${parameter.kind} parameter ${parameter.index} — accepts a payload no endpoint contract schema covers`,
+      );
+    }
+  }
+
+  for (const [route, expectation] of Object.entries(expected)) {
+    const routeParameters = parametersByRoute.get(route) ?? [];
+    if (routeParameters.length !== 1) {
+      violations.push(
+        `${route} — expected exactly one ${expectation.kind} parameter, found ${routeParameters.length}`,
+      );
       continue;
     }
-    covered.add(parameter.route);
+
+    const parameter = routeParameters[0] as RequestParameter;
+    const label = `${route} — ${parameter.kind} parameter ${parameter.index}`;
+
+    if (parameter.kind !== expectation.kind) {
+      violations.push(`${label} — expected a ${expectation.kind} parameter`);
+      continue;
+    }
 
     if (parameter.data !== undefined && parameter.data !== '') {
       violations.push(`${label} — validates only "${parameter.data}", not the whole payload`);
@@ -143,16 +344,8 @@ const schemaViolations = (
     }
 
     const attached: unknown = zodPipes[0]?.schema;
-    if (attached !== contractSchema) {
+    if (attached !== expectation.schema) {
       violations.push(`${label} — validates with a schema that is not the frozen contract schema`);
-    }
-  }
-
-  for (const route of Object.keys(expected)) {
-    if (!covered.has(route)) {
-      violations.push(
-        `${route} — has a frozen request schema but declares no body or query parameter`,
-      );
     }
   }
 
@@ -249,28 +442,32 @@ describe('contract — registered routes', () => {
   };
 
   it('accounts for every request schema the frozen contract exports', () => {
-    const isZodSchema = (value: unknown): boolean =>
-      typeof value === 'object' &&
-      value !== null &&
-      typeof (value as { safeParse?: unknown }).safeParse === 'function';
+    expect(schemaExportViolations(contracts, schemaClassifications())).toEqual([]);
+  });
 
-    const exported = Object.entries(contracts)
-      .filter(([name, value]) => /(Body|Query)$/.test(name) && isZodSchema(value))
-      .map(([name]) => name)
-      .sort();
+  it('keeps PaginationQuery composition-only and reuses its exact frozen fields', () => {
+    expect(compositionViolations()).toEqual([]);
+  });
 
-    const mapped = new Map<unknown, string>(
-      Object.entries(contracts)
-        .filter(([name]) => /(Body|Query)$/.test(name))
-        .map(([name, value]) => [value, name]),
-    );
-    const validatedByARoute = Object.values(CONTRACT_REQUEST_SCHEMAS).map(
-      (schema) => mapped.get(schema) ?? '<not exported by the contract>',
-    );
+  it('uses the exact GoogleAuthQuery export at both outside-route validation sites', async () => {
+    const safeParse = vi.spyOn(GoogleAuthQuery, 'safeParse');
 
-    expect(
-      [...validatedByARoute, ...Object.keys(SCHEMAS_VALIDATED_OUTSIDE_A_ROUTE_PARAMETER)].sort(),
-    ).toEqual(exported);
+    try {
+      await request(httpServer(harness))
+        .get(`${API_BASE}${endpoints.auth.googleStart.path}`)
+        .query({ returnTo: '/rooms/outbound' })
+        .expect(200);
+      expect(returnToFromState(encodeState('/rooms/returned', 'test-nonce'))).toBe(
+        '/rooms/returned',
+      );
+
+      expect(safeParse.mock.calls.map(([input]) => input)).toEqual([
+        { returnTo: '/rooms/outbound' },
+        { returnTo: '/rooms/returned' },
+      ]);
+    } finally {
+      safeParse.mockRestore();
+    }
   });
 
   it('registers exactly the endpoint contract plus the operational health probe', () => {
@@ -286,16 +483,7 @@ describe('contract — registered routes', () => {
     expect(registered.filter((route) => route !== health)).toEqual(expectedContractRoutes());
   });
 
-  it('declares a body or query parameter on exactly the routes the contract gives a request schema', () => {
-    const routesWithParameters = [...new Set(requestParameters().map(({ route }) => route))].sort();
-
-    // Equality in both directions. A new route that reads `@Req().body` instead of declaring
-    // `@Body()` disappears from the left side; a contract request schema nothing validates against
-    // is left stranded on the right.
-    expect(routesWithParameters).toEqual(Object.keys(CONTRACT_REQUEST_SCHEMAS).sort());
-  });
-
-  it('validates every body and query parameter with its exact frozen contract schema', () => {
+  it('declares exactly one correctly typed request parameter with its frozen schema per route', () => {
     expect(schemaViolations(requestParameters(), CONTRACT_REQUEST_SCHEMAS)).toEqual([]);
   });
 
@@ -365,7 +553,77 @@ describe('contract — registered routes', () => {
       );
 
       expect(schemaViolations(mutated, CONTRACT_REQUEST_SCHEMAS)).toEqual([
-        'POST /api/v1/uploads/init — has a frozen request schema but declares no body or query parameter',
+        'POST /api/v1/uploads/init — expected exactly one body parameter, found 0',
+      ]);
+    });
+
+    it('fails when a route changes its request parameter from body to query', () => {
+      const mutated = requestParameters().map((parameter) =>
+        parameter.route === 'POST /api/v1/folders'
+          ? { ...parameter, kind: 'query' as const }
+          : parameter,
+      );
+
+      expect(schemaViolations(mutated, CONTRACT_REQUEST_SCHEMAS)).toEqual([
+        'POST /api/v1/folders — query parameter 0 — expected a body parameter',
+      ]);
+    });
+
+    it('fails when a route declares the request payload more than once', () => {
+      const parameters = requestParameters();
+      const original = parameters.find((parameter) => parameter.route === 'POST /api/v1/folders');
+      expect(original).toBeDefined();
+      const mutated = [...parameters, { ...(original as RequestParameter), index: 1 }];
+
+      expect(schemaViolations(mutated, CONTRACT_REQUEST_SCHEMAS)).toEqual([
+        'POST /api/v1/folders — expected exactly one body parameter, found 2',
+      ]);
+    });
+
+    it('does not let a newly exported Zod request hide behind an unconventional name', () => {
+      const mutatedExports = {
+        ...contracts,
+        StartOAuthInput: z.object({ returnTo: z.string().optional() }).strict(),
+      };
+
+      expect(schemaExportViolations(mutatedExports, schemaClassifications())).toEqual([
+        'StartOAuthInput — exported Zod schema is not explicitly classified',
+      ]);
+    });
+
+    it('fails when an outside-route exception points at a local schema copy', () => {
+      const mutated = schemaClassifications().map((classification) =>
+        classification.name === 'GoogleAuthQuery'
+          ? { ...classification, schema: GoogleAuthQuery.extend({}) }
+          : classification,
+      );
+
+      expect(schemaExportViolations(contracts, mutated)).toEqual([
+        'GoogleAuthQuery — classification does not reference the exact exported schema',
+      ]);
+    });
+
+    it('fails when a composition-only schema is also classified as a route request', () => {
+      const mutated = [
+        ...schemaClassifications(),
+        { name: 'PaginationQuery', schema: PaginationQuery, usage: 'route request' as const },
+      ];
+
+      expect(schemaExportViolations(contracts, mutated)).toEqual([
+        'PaginationQuery — exported Zod schema must have exactly one classification, found 2: composition only, route request',
+      ]);
+    });
+
+    it('fails when PaginationQuery composition replaces a frozen field with a local copy', () => {
+      const copiedLimit = z.coerce.number().int().min(1).max(100).default(50);
+      const mutatedTarget = ListChildrenQuery.extend({ limit: copiedLimit });
+
+      expect(
+        compositionViolations({
+          PaginationQuery: { schema: PaginationQuery, composedInto: mutatedTarget },
+        }),
+      ).toEqual([
+        'PaginationQuery.limit — composition target does not reuse the exact frozen field schema',
       ]);
     });
   });
